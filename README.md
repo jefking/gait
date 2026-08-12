@@ -193,6 +193,24 @@ npm test
 npm run build
 ```
 
+### Test coverage
+
+Backend coverage is measured across all packages, including command and
+integration-heavy workflow code:
+
+```sh
+cd backend
+go test ./... -coverprofile=coverage.out
+go tool cover -func=coverage.out
+```
+
+This test suite does not currently provide 100% backend statement coverage. At
+the time of this change, the command above reports 75.6% overall (92.5% for
+`internal/api`, 74.9% for `internal/dashboard`, and 0% for `cmd/server`). The
+focused tests cover insight contracts, API validation failures, GitHub error
+handling, and identity persistence; server lifecycle, repository process
+failures, and several background-sync branches remain coverage gaps.
+
 Commit statistics intentionally cover only commits reachable from the latest
 default branch. Other branches, tags, submodules, and Git LFS contents are out
 of scope. PR history is counted by author and creation month; open, closed, and
