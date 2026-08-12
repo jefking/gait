@@ -1,0 +1,10 @@
+.git
+.gitignore
+.agents
+.codex
+frontend/node_modules
+frontend/dist
+backend/bin
+backend/coverage.out
+Dockerfile*
+README.md

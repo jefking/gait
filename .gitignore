@@ -1,0 +1,18 @@
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+
+# Go build and test output
+backend/bin/
+backend/coverage.out
+
+# Local configuration
+.env
+.env.*
+!.env.example
+
+# Editor and operating system files
+.DS_Store
+.idea/
+.vscode/
+*.swp

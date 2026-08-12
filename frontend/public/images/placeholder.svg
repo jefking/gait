@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" role="img" aria-labelledby="title description">
+  <title id="title">Placeholder image</title>
+  <desc id="description">A simple placeholder for the public images directory.</desc>
+  <rect width="640" height="360" rx="24" fill="#0f172a"/>
+  <path d="M208 244l74-82 54 58 36-38 60 62H208z" fill="#22d3ee" opacity=".75"/>
+  <circle cx="405" cy="122" r="30" fill="#67e8f9"/>
+  <text x="320" y="304" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="24" text-anchor="middle">public/images</text>
+</svg>

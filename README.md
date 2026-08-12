@@ -1,1 +1,111 @@
-# gait
+# Gait
+
+A small React + Go starter that builds into a single production container. The
+Go server exposes the API and serves the compiled React application, including
+files copied from `frontend/public`.
+
+## Stack
+
+- React 19 and TypeScript, built with Vite 8
+- Tailwind CSS 4 through the official Vite plugin
+- Lucide React icons
+- Go 1.26 with Chi v5
+- A multi-stage Docker production image
+
+## Project layout
+
+```text
+.
+├── backend/
+│   ├── cmd/server/       # Application entry point
+│   └── internal/api/     # Router, handlers, and static file serving
+├── frontend/
+│   ├── public/images/    # Files served unchanged from /images/*
+│   └── src/
+│       ├── components/   # Reusable React components
+│       └── lib/          # Browser-side API helpers
+└── Dockerfile            # Production build and runtime image
+```
+
+## Local development
+
+Requirements:
+
+- Node.js 24 and npm
+- Go 1.26
+- Docker, for building the production image
+
+Start the API from one terminal:
+
+```sh
+cd backend
+go run ./cmd/server
+```
+
+Start the frontend from another terminal:
+
+```sh
+cd frontend
+npm install
+npm run dev
+```
+
+Open <http://localhost:5173>. Vite proxies `/api` requests to the Go server at
+`http://localhost:8080`, so no development CORS configuration is required.
+
+## Production container
+
+Build and run the application:
+
+```sh
+docker build -t gait .
+docker run --rm -p 8080:8080 gait
+```
+
+Then open <http://localhost:8080> or check the API directly:
+
+```sh
+curl http://localhost:8080/api/health
+```
+
+The container runs as an unprivileged user and includes a health check against
+`GET /api/health`.
+
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `8080` | HTTP port used by the Go server |
+| `STATIC_DIR` | `../frontend/dist` | Directory containing the compiled frontend |
+
+The container sets `STATIC_DIR=/app/public`. During frontend development, Vite
+serves the UI, so the Go API does not require an existing frontend build.
+
+## Static images
+
+Place images in `frontend/public/images`. Vite copies them into the production
+build unchanged, and they are available from root-relative URLs:
+
+```tsx
+<img src="/images/example.png" alt="Example" />
+```
+
+`frontend/public/images/placeholder.svg` is included as a serving example.
+
+## Checks
+
+Run backend tests:
+
+```sh
+cd backend
+go test ./...
+```
+
+Run frontend checks:
+
+```sh
+cd frontend
+npm run lint
+npm run typecheck
+npm run build
+```
