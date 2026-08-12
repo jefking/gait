@@ -501,9 +501,9 @@ type activityAccumulator struct {
 	buckets   map[string]int
 }
 
-func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, _ time.Time) ActivityResponse {
+func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, evaluatedAt time.Time) ActivityResponse {
 	result := ActivityResponse{Group: query.Group, Metric: query.Metric, Series: []ActivitySeries{}}
-	availableFrom, availableTo := availableActivityRange(reports, query)
+	availableFrom, availableTo := availableActivityRange(reports, query, evaluatedAt)
 	if availableFrom.IsZero() {
 		return result
 	}
@@ -519,7 +519,7 @@ func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, _ ti
 
 	series := make(map[string]*activityAccumulator)
 	for _, report := range reports {
-		if !activityReportMatches(report, query) {
+		if !activityReportMatches(report, query, evaluatedAt) {
 			continue
 		}
 		daily, metadata := reportActivityData(report, query.Metric)
@@ -623,11 +623,14 @@ func ensureActivity(series map[string]*activityAccumulator, key, label, avatarUR
 	return entry
 }
 
-func activityReportMatches(report RepositoryReport, query ActivityQuery) bool {
+func activityReportMatches(report RepositoryReport, query ActivityQuery, evaluatedAt time.Time) bool {
 	if query.RepositoryID != 0 && report.Repository.ID != query.RepositoryID {
 		return false
 	}
 	if query.OwnerID != 0 && report.Repository.Owner.ID != query.OwnerID {
+		return false
+	}
+	if query.ExcludeDead && BuildRepositoryLiveness(report.Commits, report.Repository.CreatedAt, evaluatedAt).IsDead {
 		return false
 	}
 	return query.Metric != ActivityPullRequests || report.Pulls != nil
@@ -640,10 +643,10 @@ func reportActivityData(report RepositoryReport, metric ActivityMetric) (map[str
 	return report.Commits.Daily, report.Commits.Contributors
 }
 
-func availableActivityRange(reports map[int64]RepositoryReport, query ActivityQuery) (time.Time, time.Time) {
+func availableActivityRange(reports map[int64]RepositoryReport, query ActivityQuery, evaluatedAt time.Time) (time.Time, time.Time) {
 	var first, last time.Time
 	for _, report := range reports {
-		if !activityReportMatches(report, query) {
+		if !activityReportMatches(report, query, evaluatedAt) {
 			continue
 		}
 		daily, _ := reportActivityData(report, query.Metric)

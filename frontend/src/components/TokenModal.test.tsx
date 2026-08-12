@@ -50,8 +50,50 @@ describe('TokenModal', () => {
         onViewCached={vi.fn()}
       />,
     )
-    expect(screen.getByRole('heading', { name: 'GitHub configuration' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'GitHub' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save and sync' })).toBeInTheDocument()
+  })
+
+  it('applies dead-project exclusion only when Done is clicked', () => {
+    const onExcludeDeadChange = vi.fn()
+    render(
+      <TokenModal
+        open
+        mode="settings"
+        hasCachedData
+        submitting={false}
+        onSubmit={vi.fn()}
+        onViewCached={vi.fn()}
+        onExcludeDeadChange={onExcludeDeadChange}
+      />,
+    )
+    fireEvent.click(screen.getByRole('tab', { name: 'Projects' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Exclude dead projects' }))
+    expect(onExcludeDeadChange).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(onExcludeDeadChange).toHaveBeenCalledWith(true)
+    expect(screen.getByText(/remove their activity from graph data/i)).toBeInTheDocument()
+  })
+
+  it('discards dead-project exclusion when Cancel is clicked', () => {
+    const onExcludeDeadChange = vi.fn()
+    render(
+      <TokenModal
+        open
+        mode="settings"
+        hasCachedData
+        submitting={false}
+        onSubmit={vi.fn()}
+        onViewCached={vi.fn()}
+        onExcludeDeadChange={onExcludeDeadChange}
+      />,
+    )
+    fireEvent.click(screen.getByRole('tab', { name: 'Projects' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Exclude dead projects' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onExcludeDeadChange).not.toHaveBeenCalled()
   })
 })

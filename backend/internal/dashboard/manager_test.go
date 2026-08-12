@@ -236,6 +236,26 @@ func TestManagerSyncDiffsRepositoriesPersistsCacheAndNeverPersistsPAT(t *testing
 	}
 }
 
+func TestManagerActivityUsesSnapshotTimeForLiveness(t *testing.T) {
+	evaluatedAt := time.Date(2025, time.January, 10, 0, 0, 0, 0, time.UTC)
+	manager := &Manager{
+		snapshot: &Snapshot{GeneratedAt: evaluatedAt},
+		reports: map[int64]RepositoryReport{1: {
+			Repository: Repository{ID: 1, Owner: OwnerIdentity{ID: 10, Login: "org"}},
+			Commits: CommitStats{
+				FirstAt: time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC),
+				LastAt:  time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC),
+				Daily:   map[string]map[string]int{"2025-01-01": {"github:user": 1}},
+			},
+		}},
+	}
+
+	activity, err := manager.Activity(ActivityQuery{Group: ActivityByOwner, Metric: ActivityCommits, ExcludeDead: true})
+	if err != nil || len(activity.Series) != 1 || activity.Series[0].Total != 1 {
+		t.Fatalf("expected activity liveness to match snapshot evaluation time, got %+v, %v", activity, err)
+	}
+}
+
 func fakeRepository(id int64, name string) Repository {
 	return Repository{
 		ID: id, Name: name, FullName: "org/" + name, CloneURL: "https://github.com/org/" + name + ".git",

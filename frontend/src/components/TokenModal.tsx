@@ -1,4 +1,4 @@
-import { GitBranch, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
+import { GitBranch, KeyRound, LoaderCircle, ShieldCheck, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
@@ -8,6 +8,8 @@ interface TokenModalProps {
   hasCachedData: boolean
   submitting: boolean
   error?: string
+  excludeDead?: boolean
+  onExcludeDeadChange?: (exclude: boolean) => void
   onSubmit: (pat: string) => Promise<void>
   onViewCached: () => void
 }
@@ -18,10 +20,14 @@ export function TokenModal({
   hasCachedData,
   submitting,
   error,
+  excludeDead = false,
+  onExcludeDeadChange,
   onSubmit,
   onViewCached,
 }: TokenModalProps) {
   const [pat, setPAT] = useState('')
+  const [activeTab, setActiveTab] = useState<'github' | 'projects'>('github')
+  const [draftExcludeDead, setDraftExcludeDead] = useState(excludeDead)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -52,16 +58,66 @@ export function TokenModal({
             <GitBranch aria-hidden="true" className="size-6" />
           </div>
           <h1 id="pat-title" className="text-2xl font-semibold tracking-tight text-white">
-            {mode === 'settings' ? 'GitHub configuration' : 'Connect your GitHub history'}
+            {mode === 'settings' ? 'Settings' : 'Connect your GitHub history'}
           </h1>
           <p id="pat-description" className="mt-3 text-sm leading-6 text-slate-300">
             {mode === 'settings'
-              ? 'Enter a different personal access token to change credentials and start a fresh repository sync.'
+              ? 'Manage GitHub credentials and choose which projects appear in dashboard data.'
               : 'Enter a personal access token to discover repositories and refresh their Git and pull request history.'}
           </p>
         </div>
 
-        <form onSubmit={submit} className="space-y-5 px-6 py-6 sm:px-8">
+        {mode === 'settings' && (
+          <div role="tablist" aria-label="Settings sections" className="flex gap-1 border-b border-white/10 px-6 pt-3 sm:px-8">
+            {([['github', GitBranch, 'GitHub'], ['projects', SlidersHorizontal, 'Projects']] as const).map(([tab, Icon, label]) => (
+              <button
+                key={tab}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab}
+                onClick={() => setActiveTab(tab)}
+                className={`inline-flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition ${activeTab === tab ? 'border-cyan-300 text-cyan-200' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
+              >
+                <Icon aria-hidden="true" className="size-4" />
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {mode === 'settings' && activeTab === 'projects' ? (
+          <div role="tabpanel" className="space-y-5 px-6 py-6 sm:px-8">
+            <div>
+              <h2 className="text-base font-semibold text-white">Project filters</h2>
+              <p className="mt-1 text-sm leading-6 text-slate-400">Choose which projects appear in portfolio and graphed activity.</p>
+            </div>
+            <label className="flex cursor-pointer items-start justify-between gap-5 rounded-xl border border-white/8 bg-white/[0.03] p-4">
+              <span>
+                <span className="block text-sm font-medium text-slate-200">Exclude dead projects</span>
+                <span className="mt-1 block text-xs leading-5 text-slate-500">Hide projects marked dead and remove their activity from graph data.</span>
+              </span>
+              <input
+                type="checkbox"
+                aria-label="Exclude dead projects"
+                checked={draftExcludeDead}
+                onChange={(event) => setDraftExcludeDead(event.target.checked)}
+                className="mt-0.5 size-5 shrink-0 accent-cyan-300"
+              />
+            </label>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  onExcludeDeadChange?.(draftExcludeDead)
+                  onViewCached()
+                }}
+                className="rounded-xl bg-cyan-300 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        ) : <form onSubmit={submit} className="space-y-5 px-6 py-6 sm:px-8">
           <label className="block">
             <span className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-200">
               <KeyRound aria-hidden="true" className="size-4 text-cyan-300" />
@@ -103,7 +159,10 @@ export function TokenModal({
             {hasCachedData && (
               <button
                 type="button"
-                onClick={onViewCached}
+                onClick={() => {
+                  setDraftExcludeDead(excludeDead)
+                  onViewCached()
+                }}
                 disabled={submitting}
                 className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white disabled:opacity-50"
               >
@@ -119,7 +178,7 @@ export function TokenModal({
               {submitting ? 'Starting sync…' : mode === 'settings' ? 'Save and sync' : 'Connect and sync'}
             </button>
           </div>
-        </form>
+        </form>}
       </section>
     </div>
   )
