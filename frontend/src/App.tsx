@@ -36,7 +36,7 @@ function App() {
   const [rankCohort, setRankCohort] = useState<RankCohort>('agents')
   const [rankMetric, setRankMetric] = useState<RankMetric>('commits')
   const [insightEpoch, setInsightEpoch] = useState(0)
-  const [identities, setIdentities] = useState<IdentitySummary[]>([])
+  const [identityResult, setIdentityResult] = useState<{ key: string; data: IdentitySummary[] }>()
   const [insightResult, setInsightResult] = useState<{
     key: string
     data: InsightBundle
@@ -70,9 +70,13 @@ function App() {
   }, [applyDashboard])
 
   const syncActive = dashboard ? isSyncActive(dashboard.sync) : false
+  const snapshotGeneratedAt = dashboard?.snapshot?.generated_at
+  const identities = identityResult?.data ?? []
+  const identitiesLoading = Boolean(snapshotGeneratedAt) && identityResult?.key !== snapshotGeneratedAt
   const selectedFrom = dateRange?.userSelected ? dateRange.from : undefined
   const selectedTo = dateRange?.userSelected ? dateRange.to : undefined
-  const insightRequestKey = dashboard?.snapshot
+  const identitiesClassified = !identitiesLoading && identities.every((identity) => identity.kind !== 'unknown')
+  const insightRequestKey = dashboard?.snapshot && identitiesClassified
     ? [dashboard.snapshot.generated_at, insightEpoch, ownerId ?? '', repositoryId ?? '', actorKind ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? '', windows.sessionHours, windows.adoptionDays, windows.survivalDays, rankCohort, rankMetric].join(':')
     : ''
 
@@ -159,13 +163,15 @@ function App() {
   }, [insightRequestKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows, rankCohort, rankMetric])
 
   useEffect(() => {
-    if (!dashboard?.snapshot) return
+    if (!snapshotGeneratedAt) return
     const controller = new AbortController()
-    getIdentities(controller.signal).then((result) => setIdentities(result.identities)).catch((error: unknown) => {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) setDashboardError(error instanceof Error ? error.message : 'Could not load identities.')
-    })
+    getIdentities(controller.signal)
+      .then((result) => setIdentityResult({ key: snapshotGeneratedAt, data: result.identities }))
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) setDashboardError(error instanceof Error ? error.message : 'Could not load identities.')
+      })
     return () => controller.abort()
-  }, [dashboard?.snapshot, insightEpoch])
+  }, [snapshotGeneratedAt])
 
   const connect = async (pat: string) => {
     setSubmitting(true)
@@ -202,6 +208,7 @@ function App() {
           insights={insightResult?.data ?? null}
           insightsLoading={insightResult?.key !== insightRequestKey}
           identities={identities}
+          identitiesLoading={identitiesLoading}
           ownerId={ownerId}
           repositoryId={repositoryId}
           actorKind={actorKind}
@@ -225,7 +232,7 @@ function App() {
           onRankChange={(cohort, metric) => { setRankCohort(cohort); setRankMetric(metric) }}
           onIdentityChange={(key, update) => {
             void updateIdentityClassification(key, update)
-              .then((result) => { setIdentities(result.identities); setInsightEpoch((current) => current + 1) })
+              .then((result) => { setIdentityResult({ key: snapshotGeneratedAt ?? '', data: result.identities }); setInsightEpoch((current) => current + 1) })
               .catch((error: unknown) => setDashboardError(error instanceof Error ? error.message : 'Could not update identity.'))
           }}
           onRefresh={() => void refresh()}

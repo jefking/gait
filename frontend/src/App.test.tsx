@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import type { DashboardResponse } from './lib/api'
+import type { DashboardResponse, IdentitySummary } from './lib/api'
 
 const cachedDashboard: DashboardResponse = {
   sync: {
@@ -177,9 +177,27 @@ describe('App', () => {
     expect(screen.queryByText('Dead project activity')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Loading rank trajectories')).toBeInTheDocument()
   })
+
+  it('holds insights until every identity is classified', async () => {
+    const unresolved: IdentitySummary = {
+      key: 'mystery', canonical_key: 'mystery', name: 'Mystery Actor', kind: 'unknown', evidence: 'unverified_git_identity', confidence: 'unknown', commits: 2, pull_requests: 0, reviews: 0,
+    }
+    const fetchMock = mockAPI(cachedDashboard, [unresolved])
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Identity registry' })).toBeInTheDocument()
+    expect(screen.queryByText('Team constellation')).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/insights/'))).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Classify Mystery Actor as Human' }))
+
+    expect(await screen.findByText('Team constellation')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/insights/'))).toBe(true)
+  })
 })
 
-function mockAPI(dashboard: DashboardResponse = cachedDashboard) {
+function mockAPI(dashboard: DashboardResponse = cachedDashboard, identities: IdentitySummary[] = []) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url === '/api/dashboard') return jsonResponse(dashboard)
@@ -187,7 +205,8 @@ function mockAPI(dashboard: DashboardResponse = cachedDashboard) {
     if (url.startsWith('/api/insights/network')) return jsonResponse({ meta: emptyOverview.meta, nodes: [], edges: [], total_identities: 0 })
     if (url.startsWith('/api/insights/ramps')) return jsonResponse({ meta: emptyOverview.meta, handoffs: [], adoptions: [] })
     if (url.startsWith('/api/insights/rankings')) return jsonResponse({ meta: emptyOverview.meta, cohort: 'agents', metric: 'commits', favorable_direction: 'higher', leaderboard: [], trajectories: [] })
-    if (url === '/api/identities') return jsonResponse({ identities: [] })
+    if (url === '/api/identities') return jsonResponse({ identities })
+    if (url.startsWith('/api/identities/') && init?.method === 'PATCH') return jsonResponse({ identities: identities.map((identity) => ({ ...identity, kind: 'human', evidence: 'manual_override', confidence: 'confirmed' })) })
     if (url === '/api/sync' && init?.method === 'POST') {
       return jsonResponse({
         sync: {

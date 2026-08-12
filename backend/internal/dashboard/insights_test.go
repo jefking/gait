@@ -188,6 +188,37 @@ func TestIdentityOverridesPersistAtomically(t *testing.T) {
 	}
 }
 
+func TestIdentityClassificationSurvivesManagerRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	manager, err := NewManager(ManagerConfig{DataDir: dataDir, Runner: &fakeRepositoryRunner{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.UpdateIdentity("git:helper", IdentityOverride{Kind: ActorAgent}); err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+
+	restarted, err := NewManager(ManagerConfig{DataDir: dataDir, Runner: &fakeRepositoryRunner{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	restarted.mu.Lock()
+	restarted.reports = map[int64]RepositoryReport{1: {
+		Repository: Repository{ID: 1, FullName: "org/repo"},
+		Commits: CommitStats{Events: []CommitEvent{{
+			Hash: "abc", CommittedAt: time.Now().UTC(), Author: ContributorMetrics{Key: "git:helper", Name: "Helper"},
+		}}},
+	}}
+	restarted.mu.Unlock()
+
+	identities := restarted.Identities().Identities
+	if len(identities) != 1 || identities[0].Kind != ActorAgent || identities[0].Evidence != "manual_override" || identities[0].Confidence != "confirmed" {
+		t.Fatalf("classification was not restored after restart: %+v", identities)
+	}
+}
+
 func TestVersionedAnalysisEventsPersistBesideLegacyReport(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {

@@ -1,8 +1,11 @@
 import {
   Activity,
   Bot,
+  CircleQuestionMark,
   FileDown,
+  Fingerprint,
   GitBranch,
+  LayoutDashboard,
   Network,
   RefreshCw,
   Settings,
@@ -24,6 +27,7 @@ import type {
 import { isSyncActive } from '../lib/api'
 import { Avatar } from './Avatar'
 import { DateRangeSlider } from './DateRangeSlider'
+import { IdentityRegistryView } from './IdentityRegistryView'
 import { MomentumChart } from './MomentumChart'
 import { OwnerSelect } from './OwnerSelect'
 import { RampChart } from './RampChart'
@@ -36,6 +40,7 @@ interface DashboardViewProps {
   insights: InsightBundle | null
   insightsLoading: boolean
   identities: IdentitySummary[]
+  identitiesLoading: boolean
   ownerId?: number
   repositoryId?: number
   excludeDead: boolean
@@ -61,12 +66,16 @@ interface DashboardViewProps {
 const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0, signDisplay: 'exceptZero' })
 
 export function DashboardView({
-  snapshot, sync, insights, insightsLoading, identities, ownerId, repositoryId, actorKind, excludeDead, dateFrom, dateTo,
+  snapshot, sync, insights, insightsLoading, identities, identitiesLoading, ownerId, repositoryId, actorKind, excludeDead, dateFrom, dateTo,
   sessionHours, adoptionDays, survivalDays, rankCohort, rankMetric,
   onOwnerChange, onRepositoryChange, onActorKindChange, onDateRangeChange, onWindowsChange, onRankChange,
   onIdentityChange, onRefresh, onSettings,
 }: DashboardViewProps) {
   const [selectedIdentity, setSelectedIdentity] = useState<string>()
+  const [view, setView] = useState<'dashboard' | 'identities'>('dashboard')
+  const unknownIdentities = identities.filter((identity) => identity.kind === 'unknown').length
+  const registryRequired = identitiesLoading || unknownIdentities > 0
+  const activeView = registryRequired ? 'identities' : view
   const repositories = snapshot.repositories.filter((repo) => (!ownerId || repo.owner.id === ownerId) && (!excludeDead || !repo.liveness?.is_dead))
   const meta = insights?.overview.meta
   const summary = insights?.overview.summary
@@ -89,6 +98,16 @@ export function DashboardView({
 
       <SyncNotification sync={sync} />
 
+      <nav className="no-print mt-4 flex flex-wrap items-center gap-2" aria-label="Primary views">
+        <button type="button" disabled={registryRequired} title={registryRequired ? 'Classify every unknown actor to unlock insights' : undefined} onClick={() => setView('dashboard')} className={`inline-flex min-h-11 items-center gap-2 rounded-xl border px-4 text-sm font-medium transition disabled:cursor-not-allowed ${activeView === 'dashboard' ? 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100' : 'border-white/8 bg-slate-900/55 text-slate-400 hover:border-white/15 hover:text-slate-200 disabled:opacity-50'}`}><LayoutDashboard aria-hidden="true" className="size-4" /> Insights</button>
+        <button type="button" onClick={() => setView('identities')} className={`inline-flex min-h-11 items-center gap-2 rounded-xl border px-4 text-sm font-medium transition ${activeView === 'identities' ? 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100' : 'border-white/8 bg-slate-900/55 text-slate-400 hover:border-white/15 hover:text-slate-200'}`}><Fingerprint aria-hidden="true" className="size-4" /> Identity registry<span className="rounded-full bg-black/20 px-2 py-0.5 text-xs tabular-nums">{identities.length}</span></button>
+        {!identitiesLoading && unknownIdentities > 0 && <span className="ml-auto inline-flex min-h-11 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] px-3.5 text-sm font-medium text-amber-100"><CircleQuestionMark aria-hidden="true" className="size-4 text-amber-300" /> {unknownIdentities} unknown {unknownIdentities === 1 ? 'actor' : 'actors'}</span>}
+      </nav>
+
+      {activeView === 'identities' ? (
+        <IdentityRegistryView identities={identities} loading={identitiesLoading} onChange={onIdentityChange} />
+      ) : <>
+
       <section className="no-print mt-6 rounded-3xl border border-white/8 bg-slate-900/55 p-4 sm:p-5" aria-label="Analysis controls">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_2fr]">
           <OwnerSelect owners={snapshot.owners} value={ownerId} onChange={(next) => { onOwnerChange(next); if (repositoryId && !snapshot.repositories.some((repo) => repo.id === repositoryId && (!next || repo.owner.id === next))) onRepositoryChange(undefined) }} />
@@ -100,7 +119,6 @@ export function DashboardView({
           <span>{excludeDead ? 'Dead projects are excluded from every graph and ranking.' : 'Dead projects are included in analysis.'}</span>
           <button type="button" onClick={onSettings} className="shrink-0 text-cyan-300 hover:text-cyan-100">Project settings</button>
         </div>
-        <IdentityManager identities={identities} onChange={onIdentityChange} />
         {meta?.available_from && meta.available_to && dateFrom && dateTo && <DateRangeSlider availableFrom={meta.available_from} availableTo={meta.available_to} from={dateFrom} to={dateTo} granularity={meta.granularity} onChange={onDateRangeChange} />}
       </section>
 
@@ -127,6 +145,7 @@ export function DashboardView({
       </GraphSection>
 
       <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/8 pt-5 text-xs text-slate-600"><p>{coverage?.unknown_commits ?? 0} commits remain unknown · classifications are evidence-based and editable.</p><p>Observed associations are not causal claims.</p></footer>
+      </>}
     </div>
   )
 }
@@ -140,7 +159,6 @@ function RankControls({ cohort, metric, onChange }: { cohort:RankCohort;metric:R
 }
 
 function WindowInput({label,min,max,value,onChange}:{label:string;min:number;max:number;value:number;onChange:(value:number)=>void}) { return <label className="text-xs text-slate-500">{label}<input type="number" min={min} max={max} value={value} onChange={(event)=>onChange(Math.min(max,Math.max(min,Number(event.target.value))))} className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-200" /></label> }
-function IdentityManager({identities,onChange}:{identities:IdentitySummary[];onChange:DashboardViewProps['onIdentityChange']}) { return <details className="mt-3 rounded-xl border border-white/8 bg-slate-950/55 px-4 py-2.5"><summary className="cursor-pointer text-xs font-medium text-slate-400">Identity registry · {identities.length} detected</summary><div className="mt-3 max-h-72 overflow-auto divide-y divide-white/6">{identities.map((identity)=><div key={identity.key} className="flex items-center gap-3 py-2"><Avatar src={identity.avatar_url} name={identity.name} size="xs" /><div className="min-w-0 flex-1"><p className="truncate text-xs font-medium text-slate-300">{identity.name}</p><p className="truncate text-[10px] text-slate-600">{identity.evidence.replaceAll('_',' ')} · {identity.commits} commits</p></div><select aria-label={`Classification for ${identity.name}`} value={identity.kind} onChange={(event)=>onChange(identity.key,{kind:event.target.value as ActorKind})} className="rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-slate-200"><option value="human">Human</option><option value="agent">Agent</option><option value="unknown">Unknown</option></select></div>)}</div></details> }
 function HeaderButton({label,onClick,icon,disabled}:{label:string;onClick:()=>void;icon:React.ReactNode;disabled?:boolean}) { return <button type="button" onClick={onClick} disabled={disabled} aria-label={label} title={label} className="grid size-10 place-items-center rounded-xl border border-white/10 bg-white/5 text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/5 disabled:opacity-50">{icon}</button> }
 
 export function SyncNotification({ sync }: { sync: SyncStatus }) {
