@@ -28,13 +28,18 @@ func activityHandler(service DashboardService) http.HandlerFunc {
 			Group:  dashboard.ActivityGroup(request.URL.Query().Get("group_by")),
 			Metric: dashboard.ActivityMetric(request.URL.Query().Get("metric")),
 		}
+		var err error
+		query.ExcludeDead, err = optionalBool(request.URL.Query().Get("exclude_dead"))
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "exclude_dead must be true or false"})
+			return
+		}
 		if query.Group == "" {
 			query.Group = dashboard.ActivityByOwner
 		}
 		if query.Metric == "" {
 			query.Metric = dashboard.ActivityCommits
 		}
-		var err error
 		query.OwnerID, err = optionalPositiveInt64(request.URL.Query().Get("owner_id"))
 		if err != nil {
 			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "owner_id must be a positive integer"})
@@ -164,6 +169,13 @@ func optionalDate(value string) (*time.Time, error) {
 		return nil, err
 	}
 	return &parsed, nil
+}
+
+func optionalBool(value string) (bool, error) {
+	if value == "" {
+		return false, nil
+	}
+	return strconv.ParseBool(value)
 }
 
 func writeJSONValue(response http.ResponseWriter, status int, value any) {

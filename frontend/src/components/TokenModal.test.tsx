@@ -50,8 +50,28 @@ describe('TokenModal', () => {
         onViewCached={vi.fn()}
       />,
     )
-    expect(screen.getByRole('heading', { name: 'GitHub configuration' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'GitHub' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save and sync' })).toBeInTheDocument()
+  })
+
+  it('configures dead-project exclusion from the Projects tab', () => {
+    const onExcludeDeadChange = vi.fn()
+    render(
+      <TokenModal
+        open
+        mode="settings"
+        hasCachedData
+        submitting={false}
+        onSubmit={vi.fn()}
+        onViewCached={vi.fn()}
+        onExcludeDeadChange={onExcludeDeadChange}
+      />,
+    )
+    fireEvent.click(screen.getByRole('tab', { name: 'Projects' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Exclude dead projects' }))
+    expect(onExcludeDeadChange).toHaveBeenCalledWith(true)
+    expect(screen.getByText(/remove their activity from graph data/i)).toBeInTheDocument()
   })
 })

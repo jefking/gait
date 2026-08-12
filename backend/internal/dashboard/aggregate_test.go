@@ -116,6 +116,25 @@ func TestBuildActivityAdaptsGranularityToSelectedRange(t *testing.T) {
 	}
 }
 
+func TestBuildActivityExcludesDeadRepositories(t *testing.T) {
+	evaluatedAt := time.Date(2025, time.January, 10, 0, 0, 0, 0, time.UTC)
+	reports := map[int64]RepositoryReport{
+		1: {
+			Repository: Repository{ID: 1, Owner: OwnerIdentity{ID: 1, Login: "org"}},
+			Commits:    CommitStats{Daily: map[string]map[string]int{"2020-01-01": {"old": 3}}},
+		},
+		2: {
+			Repository: Repository{ID: 2, Owner: OwnerIdentity{ID: 1, Login: "org"}},
+			Commits:    CommitStats{Daily: map[string]map[string]int{"2025-01-10": {"current": 2}}},
+		},
+	}
+
+	activity := BuildActivity(reports, ActivityQuery{Group: ActivityByOwner, Metric: ActivityCommits, ExcludeDead: true}, evaluatedAt)
+	if activity.AvailableFrom != "2025-01-10" || len(activity.Series) != 1 || activity.Series[0].Total != 2 {
+		t.Fatalf("expected only active repository data, got %+v", activity)
+	}
+}
+
 func TestBuildSnapshotMarksUnavailablePullRequests(t *testing.T) {
 	repository := Repository{ID: 1, Name: "repo", FullName: "org/repo", Owner: OwnerIdentity{ID: 2, Login: "org"}}
 	report := RepositoryReport{

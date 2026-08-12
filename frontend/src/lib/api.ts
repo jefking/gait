@@ -196,6 +196,7 @@ export interface ActivityOptions {
   metric: ActivityMetric
   ownerId?: number
   repositoryId?: number
+  excludeDead?: boolean
   from?: string
   to?: string
 }
@@ -251,6 +252,7 @@ export function getActivity(
   if (options.repositoryId) {
     query.set('repository_id', String(options.repositoryId))
   }
+  if (options.excludeDead) query.set('exclude_dead', 'true')
   if (options.from) query.set('from', options.from)
   if (options.to) query.set('to', options.to)
   return requestJSON<ActivityResponse>(`/api/activity?${query}`, { signal })

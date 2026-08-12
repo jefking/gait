@@ -211,6 +211,7 @@ type ActivityQuery struct {
 	Metric       ActivityMetric
 	OwnerID      int64
 	RepositoryID int64
+	ExcludeDead  bool
 	From         *time.Time
 	To           *time.Time
 }

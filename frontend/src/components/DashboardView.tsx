@@ -42,6 +42,7 @@ interface DashboardViewProps {
   metric: ActivityMetric
   ownerId?: number
   repositoryId?: number
+  excludeDead: boolean
   dateFrom?: string
   dateTo?: string
   onGroupByChange: (group: ActivityGroup) => void
@@ -65,6 +66,7 @@ export function DashboardView({
   metric,
   ownerId,
   repositoryId,
+  excludeDead,
   dateFrom,
   dateTo,
   onGroupByChange,
@@ -76,20 +78,19 @@ export function DashboardView({
   onSettings,
 }: DashboardViewProps) {
   const [search, setSearch] = useState('')
-  const [hideDead, setHideDead] = useState(false)
   const repositoriesForOwner = ownerId
-    ? snapshot.repositories.filter((repository) => repository.owner.id === ownerId)
-    : snapshot.repositories
+    ? snapshot.repositories.filter((repository) => repository.owner.id === ownerId && (!excludeDead || !repository.liveness?.is_dead))
+    : snapshot.repositories.filter((repository) => !excludeDead || !repository.liveness?.is_dead)
   const selectedOwner = snapshot.owners.find((owner) => owner.owner.id === ownerId)
   const selectedRepository = snapshot.repositories.find((repository) => repository.id === repositoryId)
 
   const filteredRepositories = useMemo(() => {
     const query = search.trim().toLowerCase()
     return snapshot.repositories.filter((repository) => {
-      if (hideDead && repository.liveness?.is_dead) return false
+      if (excludeDead && repository.liveness?.is_dead) return false
       return !query || `${repository.full_name} ${repository.description ?? ''}`.toLowerCase().includes(query)
     })
-  }, [hideDead, search, snapshot.repositories])
+  }, [excludeDead, search, snapshot.repositories])
 
   const deadRepositories = snapshot.totals.dead_repositories
     ?? snapshot.repositories.filter((repository) => repository.liveness?.is_dead).length
@@ -264,16 +265,6 @@ export function DashboardView({
               <h2 className="mt-2 text-xl font-semibold text-white">Owners and repositories</h2>
             </div>
             <div className="no-print flex flex-col gap-2 sm:flex-row sm:items-center">
-              <button
-                type="button"
-                aria-pressed={hideDead}
-                onClick={() => setHideDead((current) => !current)}
-                className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-medium transition ${hideDead ? 'border-rose-300/35 bg-rose-300/10 text-rose-100' : 'border-white/10 bg-slate-950 text-slate-400 hover:border-rose-300/25 hover:text-rose-200'}`}
-              >
-                <Skull aria-hidden="true" className="size-4" />
-                Hide dead
-                <span className="rounded-full bg-white/5 px-1.5 py-0.5 text-[10px] tabular-nums">{deadRepositories}</span>
-              </button>
               <label className="relative block sm:w-72">
                 <span className="sr-only">Search repositories</span>
                 <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
@@ -298,7 +289,7 @@ export function DashboardView({
             ))}
             {filteredRepositories.length === 0 && (
               <p className="rounded-2xl border border-dashed border-white/10 py-12 text-center text-sm text-slate-500">
-                {hideDead && !search ? 'All repositories are hidden by the dead-project filter.' : `No repositories match “${search}”.`}
+                {excludeDead && !search ? 'All repositories are excluded by project settings.' : `No repositories match “${search}”.`}
               </p>
             )}
           </div>
@@ -463,9 +454,9 @@ function RepositoryRow({ repository }: { repository: RepositorySummary }) {
             <span
               title={livenessDescription(repository)}
               aria-label={`Dead repository. ${livenessDescription(repository)}`}
-              className="inline-flex items-center gap-1 rounded-full border border-rose-300/20 bg-rose-300/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-200"
+              className="inline-grid size-5 place-items-center rounded-full border border-rose-300/25 bg-rose-300/10 text-rose-200"
             >
-              <Skull aria-hidden="true" className="size-3" /> Dead
+              <Skull aria-hidden="true" className="size-3" />
             </span>
           )}
           {repository.sync_status === 'warning' && (

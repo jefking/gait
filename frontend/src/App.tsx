@@ -27,6 +27,7 @@ function App() {
   const [metric, setMetric] = useState<ActivityMetric>('commits')
   const [ownerId, setOwnerId] = useState<number>()
   const [repositoryId, setRepositoryId] = useState<number>()
+  const [excludeDead, setExcludeDead] = useState(false)
   const [dateRange, setDateRange] = useState<{ from: string; to: string; userSelected: boolean }>()
   const [activityResult, setActivityResult] = useState<{
     key: string
@@ -64,7 +65,7 @@ function App() {
   const selectedFrom = dateRange?.userSelected ? dateRange.from : undefined
   const selectedTo = dateRange?.userSelected ? dateRange.to : undefined
   const activityRequestKey = dashboard?.snapshot
-    ? [dashboard.snapshot.generated_at, groupBy, metric, ownerId ?? '', repositoryId ?? '', selectedFrom ?? '', selectedTo ?? ''].join(':')
+    ? [dashboard.snapshot.generated_at, groupBy, metric, ownerId ?? '', repositoryId ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? ''].join(':')
     : ''
 
   useEffect(() => {
@@ -118,7 +119,7 @@ function App() {
     if (!activityRequestKey) return
     const controller = new AbortController()
     getActivity(
-      { groupBy, metric, ownerId, repositoryId, from: selectedFrom, to: selectedTo },
+      { groupBy, metric, ownerId, repositoryId, excludeDead, from: selectedFrom, to: selectedTo },
       controller.signal,
     )
       .then((data) => {
@@ -144,7 +145,7 @@ function App() {
         setDashboardError(error instanceof Error ? error.message : 'Could not load activity history.')
       })
     return () => controller.abort()
-  }, [activityRequestKey, groupBy, metric, ownerId, repositoryId, selectedFrom, selectedTo])
+  }, [activityRequestKey, groupBy, metric, ownerId, repositoryId, excludeDead, selectedFrom, selectedTo])
 
   const connect = async (pat: string) => {
     setSubmitting(true)
@@ -174,6 +175,7 @@ function App() {
           metric={metric}
           ownerId={ownerId}
           repositoryId={repositoryId}
+          excludeDead={excludeDead}
           dateFrom={dateRange?.from}
           dateTo={dateRange?.to}
           onGroupByChange={setGroupBy}
@@ -217,6 +219,13 @@ function App() {
         hasCachedData={Boolean(dashboard?.snapshot)}
         submitting={submitting}
         error={modalError}
+        excludeDead={excludeDead}
+        onExcludeDeadChange={(next) => {
+          setExcludeDead(next)
+          if (next && dashboard?.snapshot?.repositories.find((repository) => repository.id === repositoryId)?.liveness?.is_dead) {
+            setRepositoryId(undefined)
+          }
+        }}
         onSubmit={connect}
         onViewCached={() => {
           setModalError(undefined)
