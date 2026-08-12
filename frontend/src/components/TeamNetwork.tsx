@@ -397,6 +397,9 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
         </table>
       </div>
       <div className="sr-only"><table><caption>Collaboration pairs and evidence</caption><thead><tr><th>Pair</th><th>Interaction days</th><th>Co-authorships</th><th>Reviews</th><th>Handoffs</th><th>Action</th></tr></thead><tbody>{network.edges.map((edge) => <tr key={edgeKey(edge)}><td>{pairLabel(edge, network.nodes)}</td><td>{edge.interaction_days}</td><td>{edge.coauthorships}</td><td>{edge.review_interactions}</td><td>{edge.handoffs}</td><td><button type="button" onClick={() => { onSelect(undefined); setSelectedPair(edgeKey(edge)) }}>Inspect pair</button></td></tr>)}</tbody></table></div>
+      <div className="print-only report-table-wrap">
+        <table className="report-table"><caption>Strongest collaboration pairs</caption><thead><tr><th>Pair</th><th>Interaction days</th><th>Co-authored</th><th>Reviews</th><th>Handoffs</th></tr></thead><tbody>{[...network.edges].sort((a, b) => b.interaction_days - a.interaction_days).slice(0, 12).map((edge) => <tr key={edgeKey(edge)}><td>{pairLabel(edge, network.nodes)}</td><td>{edge.interaction_days}</td><td>{edge.coauthorships}</td><td>{edge.review_interactions}</td><td>{edge.handoffs}</td></tr>)}</tbody></table>
+      </div>
     </div>
   )
 })

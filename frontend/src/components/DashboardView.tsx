@@ -86,6 +86,11 @@ export function DashboardView({
   const coverage = meta?.coverage
   const period = meta?.from && meta.to ? `${meta.from} → ${meta.to}` : 'All available history'
   const attribution = `${coverage?.unknown_commits ?? 0} excluded`
+  const scope = [
+    ownerId ? snapshot.owners.find((owner) => owner.owner.id === ownerId)?.owner.login : 'All owners',
+    repositoryId ? snapshot.repositories.find((repository) => repository.id === repositoryId)?.name : 'All repositories',
+    actorKind ? `${actorKind[0].toUpperCase()}${actorKind.slice(1)} activity` : 'Humans + agents',
+  ].filter(Boolean).join(' · ')
   const cards = [
     { label: 'Agent participation', value: summary ? percent.format(summary.agent_participation) : '—', detail: `${coverage?.classified_commits ?? 0} classified · ${period} · ${attribution}`, icon: Bot, tone: 'text-violet-300' },
     { label: 'Observed handoff lift', value: summary?.handoff_lift === undefined ? '—' : percent.format(summary.handoff_lift), detail: `${summary?.handoff_episodes ?? 0} episodes · ${sessionHours}h windows · ${attribution}`, icon: GitBranch, tone: summary?.handoff_lift !== undefined && summary.handoff_lift >= 0 ? 'text-emerald-300' : 'text-rose-300' },
@@ -99,6 +104,18 @@ export function DashboardView({
         <div className="flex items-center gap-4"><img src="/images/gait.svg" alt="" aria-hidden="true" className="h-12 w-auto shrink-0 object-contain drop-shadow-[0_6px_16px_rgba(231,160,52,0.2)]" /><div><div className="flex items-center gap-2"><h1 className="text-xl font-semibold tracking-tight text-white">Gait</h1><span className="rounded-full border border-violet-300/15 bg-violet-300/[0.06] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-violet-200">Human × Agent intelligence</span></div><p className="mt-1 text-xs text-slate-500">Default-branch engineering relationships · updated {formatDate(snapshot.generated_at)}</p></div></div>
         <div className="flex items-center justify-between gap-3 sm:justify-end"><a href={snapshot.viewer.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-2 py-1.5 transition hover:bg-white/5"><Avatar src={snapshot.viewer.avatar_url} name={snapshot.viewer.name || snapshot.viewer.login} size="sm" /><span className="hidden text-sm font-medium text-slate-300 sm:block">{snapshot.viewer.name || snapshot.viewer.login}</span></a><div className="no-print flex gap-2"><HeaderButton label="Export PDF" onClick={() => window.print()} icon={<FileDown className="size-4" />} /><HeaderButton label="Refresh repositories" onClick={onRefresh} disabled={isSyncActive(sync)} icon={<RefreshCw className={`size-4 ${isSyncActive(sync) ? 'animate-spin' : ''}`} />} /><HeaderButton label="GitHub settings" onClick={onSettings} disabled={isSyncActive(sync)} icon={<Settings className="size-4" />} /></div></div>
       </header>
+
+      <section className="print-only report-cover" aria-label="Report context">
+        <p className="report-kicker">Engineering intelligence report</p>
+        <h2>Human × Agent collaboration</h2>
+        <p className="report-period">{period}</p>
+        <dl>
+          <div><dt>Scope</dt><dd>{scope}</dd></div>
+          <div><dt>Generated</dt><dd>{formatDate(snapshot.generated_at)}</dd></div>
+          <div><dt>Coverage</dt><dd>{coverage?.classified_commits ?? 0} classified commits · {coverage?.unknown_commits ?? 0} excluded</dd></div>
+          <div><dt>Method</dt><dd>{sessionHours}h handoffs · {adoptionDays}d adoption · {survivalDays}d quality</dd></div>
+        </dl>
+      </section>
 
       <SyncNotification sync={sync} />
 
