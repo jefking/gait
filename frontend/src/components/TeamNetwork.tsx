@@ -7,7 +7,7 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from 'd3'
-import { Bot, Network, Pause, Play, UserRound, UsersRound } from 'lucide-react'
+import { Bot, Maximize2, Move, Network, Pause, Play, UserRound, UsersRound, ZoomIn, ZoomOut } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ActorKind, NetworkEdge, NetworkNode, NetworkResponse } from '../lib/api'
 import { Avatar } from './Avatar'
@@ -22,6 +22,21 @@ interface DrawEdge extends SimulationLinkDatum<DrawNode> {
   source: string | DrawNode
   target: string | DrawNode
   data: NetworkEdge
+}
+
+interface ViewTransform {
+  x: number
+  y: number
+  scale: number
+}
+
+interface PointerGesture {
+  id: number
+  startX: number
+  startY: number
+  lastX: number
+  lastY: number
+  moved: boolean
 }
 
 interface TeamNetworkProps {
@@ -48,9 +63,15 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
   const drawNodes = useRef<DrawNode[]>([])
   const drawEdges = useRef<DrawEdge[]>([])
   const positions = useRef(new Map<string, { x: number; y: number }>())
+  const viewport = useRef<ViewTransform>({ x: 0, y: 0, scale: 1 })
+  const viewportChanged = useRef(false)
+  const renderedScope = useRef('')
+  const redraw = useRef<() => void>(() => undefined)
+  const pointerGesture = useRef<PointerGesture | undefined>(undefined)
   const [metric, setMetric] = useState<EdgeMetric>('interaction_days')
   const [periodIndex, setPeriodIndex] = useState<number>()
   const [playing, setPlaying] = useState(false)
+  const [panning, setPanning] = useState(false)
   const [selectedPair, setSelectedPair] = useState<string>()
   const selected = network?.nodes.find((node) => node.key === selectedKey)
   const selectedEdge = network?.edges.find((edge) => edgeKey(edge) === selectedPair)
@@ -97,11 +118,19 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
     const edges: DrawEdge[] = visibleNetwork.edges.map((edge) => ({ source: edge.source, target: edge.target, data: edge }))
     const maxEdge = Math.max(1, ...visibleNetwork.edges.map((edge) => edge[metric]))
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    if (renderedScope.current !== scope) {
+      renderedScope.current = scope
+      viewport.current = { x: 0, y: 0, scale: 1 }
+      viewportChanged.current = false
+    }
 
     const render = () => {
       context.clearRect(0, 0, width, height)
       context.fillStyle = '#020617'
       context.fillRect(0, 0, width, height)
+      context.save()
+      context.translate(viewport.current.x, viewport.current.y)
+      context.scale(viewport.current.scale, viewport.current.scale)
       for (const edge of edges) {
         const source = edge.source as DrawNode
         const target = edge.target as DrawNode
@@ -123,7 +152,9 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
         positions.current.set(node.key, { x: node.x, y: node.y })
         drawActor(context, node, node.key === selectedKey)
       }
+      context.restore()
     }
+    redraw.current = render
 
     const simulation = forceSimulation(nodes)
       .force('link', forceLink<DrawNode, DrawEdge>(edges).id((node) => node.key).distance(85).strength(0.35))
@@ -131,26 +162,62 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
       .force('collide', forceCollide<DrawNode>().radius((node) => node.radius + 10))
       .force('center', forceCenter(width / 2, height / 2))
       .on('tick', render)
+      .on('end', () => {
+        if (!viewportChanged.current) viewport.current = fitTransform(nodes)
+        render()
+      })
     drawNodes.current = nodes
     drawEdges.current = edges
     if (reducedMotion) {
       simulation.stop()
       for (let index = 0; index < 180; index += 1) simulation.tick()
+      viewport.current = fitTransform(nodes)
       render()
     }
-    return () => { simulation.stop() }
+    return () => { simulation.stop(); redraw.current = () => undefined }
   }, [visibleNetwork, scope, selectedKey, selectedPair, metric])
 
   if (loading) return <div className="h-[470px] animate-pulse rounded-2xl bg-white/[0.03]" aria-label="Loading team constellation" />
   if (!network || network.nodes.length === 0) return <EmptyNetwork />
 
+  const canvasPoint = (element: HTMLCanvasElement, clientX: number, clientY: number) => {
+    const bounds = element.getBoundingClientRect()
+    return {
+      x: ((clientX - bounds.left) / bounds.width) * width,
+      y: ((clientY - bounds.top) / bounds.height) * height,
+    }
+  }
+
+  const worldPoint = (element: HTMLCanvasElement, clientX: number, clientY: number) => {
+    const point = canvasPoint(element, clientX, clientY)
+    return {
+      x: (point.x - viewport.current.x) / viewport.current.scale,
+      y: (point.y - viewport.current.y) / viewport.current.scale,
+    }
+  }
+
+  const applyViewport = (next: ViewTransform) => {
+    viewport.current = next
+    viewportChanged.current = true
+    redraw.current()
+  }
+
+  const zoomAt = (x: number, y: number, factor: number) => {
+    const current = viewport.current
+    const scale = Math.max(0.3, Math.min(4, current.scale * factor))
+    const worldX = (x - current.x) / current.scale
+    const worldY = (y - current.y) / current.scale
+    applyViewport({ x: x - worldX * scale, y: y - worldY * scale, scale })
+  }
+
+  const fitNetwork = () => applyViewport(fitTransform(drawNodes.current))
+
   const selectFromCanvas = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const x = ((event.clientX - bounds.left) / bounds.width) * width
-    const y = ((event.clientY - bounds.top) / bounds.height) * height
+    const { x, y } = worldPoint(event.currentTarget, event.clientX, event.clientY)
+    const hitPadding = 8 / viewport.current.scale
     const candidate = drawNodes.current
       .map((node) => ({ node, distance: Math.hypot((node.x ?? 0) - x, (node.y ?? 0) - y) }))
-      .filter(({ node, distance }) => distance <= node.radius + 8)
+      .filter(({ node, distance }) => distance <= node.radius + hitPadding)
       .sort((left, right) => left.distance - right.distance)[0]?.node
     if (candidate) {
       setSelectedPair(undefined)
@@ -159,10 +226,63 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
     }
     const pair = drawEdges.current
       .map((edge) => ({ edge, distance: pointToSegmentDistance(x, y, edge.source as DrawNode, edge.target as DrawNode) }))
-      .filter(({ distance }) => distance <= 9)
+      .filter(({ distance }) => distance <= 9 / viewport.current.scale)
       .sort((left, right) => left.distance - right.distance)[0]?.edge.data
     setSelectedPair(pair ? edgeKey(pair) : undefined)
     onSelect(undefined)
+  }
+
+  const startPan = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0) return
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    pointerGesture.current = { id: event.pointerId, startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, moved: false }
+    setPanning(true)
+  }
+
+  const movePan = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const gesture = pointerGesture.current
+    if (!gesture || gesture.id !== event.pointerId) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const deltaX = ((event.clientX - gesture.lastX) / bounds.width) * width
+    const deltaY = ((event.clientY - gesture.lastY) / bounds.height) * height
+    gesture.lastX = event.clientX
+    gesture.lastY = event.clientY
+    if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 4) gesture.moved = true
+    applyViewport({ ...viewport.current, x: viewport.current.x + deltaX, y: viewport.current.y + deltaY })
+  }
+
+  const endPan = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const gesture = pointerGesture.current
+    if (!gesture || gesture.id !== event.pointerId) return
+    pointerGesture.current = undefined
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+    setPanning(false)
+    if (!gesture.moved) selectFromCanvas(event)
+  }
+
+  const cancelPan = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (pointerGesture.current?.id !== event.pointerId) return
+    pointerGesture.current = undefined
+    setPanning(false)
+  }
+
+  const handleWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
+    event.preventDefault()
+    const point = canvasPoint(event.currentTarget, event.clientX, event.clientY)
+    zoomAt(point.x, point.y, Math.exp(-event.deltaY * 0.0015))
+  }
+
+  const handleCanvasKey = (event: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const panDistance = 48
+    if (event.key === 'ArrowLeft') applyViewport({ ...viewport.current, x: viewport.current.x - panDistance })
+    else if (event.key === 'ArrowRight') applyViewport({ ...viewport.current, x: viewport.current.x + panDistance })
+    else if (event.key === 'ArrowUp') applyViewport({ ...viewport.current, y: viewport.current.y - panDistance })
+    else if (event.key === 'ArrowDown') applyViewport({ ...viewport.current, y: viewport.current.y + panDistance })
+    else if (event.key === '+' || event.key === '=') zoomAt(width / 2, height / 2, 1.25)
+    else if (event.key === '-') zoomAt(width / 2, height / 2, 0.8)
+    else if (event.key === '0') fitNetwork()
+    else return
+    event.preventDefault()
   }
 
   return (
@@ -189,14 +309,29 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
       </div>
       {periods.length > 1 && <div className="no-print mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-white/8 bg-slate-950/50 px-3 py-2"><button type="button" onClick={() => { if (!playing && activePeriodIndex >= periods.length - 1) setPeriodIndex(0); setPlaying((current) => !current) }} disabled={window.matchMedia?.('(prefers-reduced-motion: reduce)').matches} className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-slate-300 disabled:opacity-40">{playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}{playing ? 'Pause' : 'Play'}</button><label className="flex min-w-52 flex-1 items-center gap-3 text-xs text-slate-500">Network period<input aria-label="Network playback period" type="range" min={0} max={periods.length-1} value={activePeriodIndex} onChange={(event) => { setPlaying(false); setPeriodIndex(Number(event.target.value)) }} className="w-full accent-cyan-300" /></label><time className="w-24 text-right text-xs tabular-nums text-slate-400">{activePeriod}</time></div>}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-        <canvas
-          ref={canvasRef}
-          width={width}
-          height={height}
-          onPointerUp={selectFromCanvas}
-          className="h-auto w-full rounded-2xl border border-white/8 bg-slate-950"
-          aria-label="Team constellation. Select an identity from the accessible list below for details."
-        />
+        <div className="relative min-w-0 overflow-hidden rounded-2xl border border-white/8 bg-slate-950">
+          <canvas
+            ref={canvasRef}
+            width={width}
+            height={height}
+            tabIndex={0}
+            onPointerDown={startPan}
+            onPointerMove={movePan}
+            onPointerUp={endPan}
+            onPointerCancel={cancelPan}
+            onWheel={handleWheel}
+            onKeyDown={handleCanvasKey}
+            className={`h-auto w-full touch-none outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-300/60 ${panning ? 'cursor-grabbing' : 'cursor-grab'}`}
+            aria-label="Interactive team constellation"
+            aria-describedby="team-constellation-help"
+          />
+          <div className="no-print absolute right-3 top-3 flex gap-1 rounded-2xl border border-white/10 bg-slate-950/85 p-1.5 shadow-xl backdrop-blur" aria-label="Constellation view controls">
+            <button type="button" onClick={() => zoomAt(width / 2, height / 2, 1.25)} aria-label="Zoom in team constellation" title="Zoom in" className="grid size-11 place-items-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white"><ZoomIn aria-hidden="true" className="size-5" /></button>
+            <button type="button" onClick={() => zoomAt(width / 2, height / 2, 0.8)} aria-label="Zoom out team constellation" title="Zoom out" className="grid size-11 place-items-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white"><ZoomOut aria-hidden="true" className="size-5" /></button>
+            <button type="button" onClick={fitNetwork} aria-label="Fit team constellation to view" title="Fit to view" className="grid size-11 place-items-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white"><Maximize2 aria-hidden="true" className="size-5" /></button>
+          </div>
+          <p id="team-constellation-help" className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-2 rounded-xl border border-white/8 bg-slate-950/80 px-3 py-2 text-xs text-slate-400 backdrop-blur"><Move aria-hidden="true" className="size-4 text-cyan-300" /> Drag to pan · Scroll to zoom</p>
+        </div>
         <aside className="rounded-2xl border border-white/8 bg-slate-950/60 p-4">
           {selected ? (
             <IdentityDetail node={selected} allNodes={network.nodes} onClassify={onClassify} onRename={onRename} onMerge={onMerge} onUnmerge={onUnmerge} />
@@ -219,6 +354,24 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
       <div className="sr-only"><table><caption>Collaboration pairs and evidence</caption><thead><tr><th>Pair</th><th>Interaction days</th><th>Co-authorships</th><th>Reviews</th><th>Handoffs</th><th>Action</th></tr></thead><tbody>{network.edges.map((edge) => <tr key={edgeKey(edge)}><td>{pairLabel(edge, network.nodes)}</td><td>{edge.interaction_days}</td><td>{edge.coauthorships}</td><td>{edge.review_interactions}</td><td>{edge.handoffs}</td><td><button type="button" onClick={() => { onSelect(undefined); setSelectedPair(edgeKey(edge)) }}>Inspect pair</button></td></tr>)}</tbody></table></div>
     </div>
   )
+}
+
+function fitTransform(nodes: DrawNode[]): ViewTransform {
+  const positioned = nodes.filter((node) => Number.isFinite(node.x) && Number.isFinite(node.y))
+  if (positioned.length === 0) return { x: 0, y: 0, scale: 1 }
+  const minX = Math.min(...positioned.map((node) => (node.x ?? 0) - node.radius))
+  const maxX = Math.max(...positioned.map((node) => (node.x ?? 0) + node.radius))
+  const minY = Math.min(...positioned.map((node) => (node.y ?? 0) - node.radius))
+  const maxY = Math.max(...positioned.map((node) => (node.y ?? 0) + node.radius + 20))
+  const padding = 56
+  const graphWidth = Math.max(1, maxX - minX)
+  const graphHeight = Math.max(1, maxY - minY)
+  const scale = Math.max(0.3, Math.min(1.25, (width - padding * 2) / graphWidth, (height - padding * 2) / graphHeight))
+  return {
+    x: width / 2 - ((minX + maxX) / 2) * scale,
+    y: height / 2 - ((minY + maxY) / 2) * scale,
+    scale,
+  }
 }
 
 function drawActor(context: CanvasRenderingContext2D, node: DrawNode, selected: boolean) {

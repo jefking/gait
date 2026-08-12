@@ -75,6 +75,11 @@ describe('Human × Agent charts', () => {
     render(<TeamNetwork network={network} loading={false} onSelect={() => undefined} onClassify={() => undefined} onRename={() => undefined} onMerge={() => undefined} onUnmerge={() => undefined} />)
     expect(screen.getByRole('slider', { name: 'Network playback period' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Play' })).toBeInTheDocument()
+    expect(screen.getByText(/Drag to pan · Scroll to zoom/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Zoom in team constellation' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Zoom out team constellation' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Fit team constellation to view' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Interactive team constellation')).toHaveAttribute('tabindex', '0')
   })
 })
 
