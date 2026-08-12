@@ -178,8 +178,12 @@ func (manager *Manager) Activity(query ActivityQuery) (ActivityResponse, error) 
 	for id, report := range manager.reports {
 		reports[id] = report
 	}
+	evaluatedAt := time.Now().UTC()
+	if manager.snapshot != nil {
+		evaluatedAt = manager.snapshot.GeneratedAt
+	}
 	manager.mu.RUnlock()
-	return BuildActivity(reports, query, time.Now()), nil
+	return BuildActivity(reports, query, evaluatedAt), nil
 }
 
 func (manager *Manager) Start(token string) (SyncStatus, error) {
