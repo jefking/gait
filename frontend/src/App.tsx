@@ -67,6 +67,7 @@ function App() {
   const activityRequestKey = dashboard?.snapshot
     ? [dashboard.snapshot.generated_at, groupBy, metric, ownerId ?? '', repositoryId ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? ''].join(':')
     : ''
+  const currentActivity = activityResult?.key === activityRequestKey ? activityResult.data : null
 
   useEffect(() => {
     let cancelled = false
@@ -169,8 +170,8 @@ function App() {
         <DashboardView
           snapshot={dashboard.snapshot}
           sync={dashboard.sync}
-          activity={activityResult?.data ?? null}
-          activityLoading={!activityResult}
+          activity={currentActivity}
+          activityLoading={!currentActivity}
           groupBy={groupBy}
           metric={metric}
           ownerId={ownerId}

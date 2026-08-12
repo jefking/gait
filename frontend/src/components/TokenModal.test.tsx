@@ -56,7 +56,7 @@ describe('TokenModal', () => {
     expect(screen.getByRole('button', { name: 'Save and sync' })).toBeInTheDocument()
   })
 
-  it('configures dead-project exclusion from the Projects tab', () => {
+  it('applies dead-project exclusion only when Done is clicked', () => {
     const onExcludeDeadChange = vi.fn()
     render(
       <TokenModal
@@ -71,7 +71,29 @@ describe('TokenModal', () => {
     )
     fireEvent.click(screen.getByRole('tab', { name: 'Projects' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Exclude dead projects' }))
+    expect(onExcludeDeadChange).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(onExcludeDeadChange).toHaveBeenCalledWith(true)
     expect(screen.getByText(/remove their activity from graph data/i)).toBeInTheDocument()
+  })
+
+  it('discards dead-project exclusion when Cancel is clicked', () => {
+    const onExcludeDeadChange = vi.fn()
+    render(
+      <TokenModal
+        open
+        mode="settings"
+        hasCachedData
+        submitting={false}
+        onSubmit={vi.fn()}
+        onViewCached={vi.fn()}
+        onExcludeDeadChange={onExcludeDeadChange}
+      />,
+    )
+    fireEvent.click(screen.getByRole('tab', { name: 'Projects' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Exclude dead projects' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onExcludeDeadChange).not.toHaveBeenCalled()
   })
 })

@@ -27,6 +27,7 @@ export function TokenModal({
 }: TokenModalProps) {
   const [pat, setPAT] = useState('')
   const [activeTab, setActiveTab] = useState<'github' | 'projects'>('github')
+  const [draftExcludeDead, setDraftExcludeDead] = useState(excludeDead)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -98,13 +99,20 @@ export function TokenModal({
               <input
                 type="checkbox"
                 aria-label="Exclude dead projects"
-                checked={excludeDead}
-                onChange={(event) => onExcludeDeadChange?.(event.target.checked)}
+                checked={draftExcludeDead}
+                onChange={(event) => setDraftExcludeDead(event.target.checked)}
                 className="mt-0.5 size-5 shrink-0 accent-cyan-300"
               />
             </label>
             <div className="flex justify-end">
-              <button type="button" onClick={onViewCached} className="rounded-xl bg-cyan-300 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200">
+              <button
+                type="button"
+                onClick={() => {
+                  onExcludeDeadChange?.(draftExcludeDead)
+                  onViewCached()
+                }}
+                className="rounded-xl bg-cyan-300 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200"
+              >
                 Done
               </button>
             </div>
@@ -151,7 +159,10 @@ export function TokenModal({
             {hasCachedData && (
               <button
                 type="button"
-                onClick={onViewCached}
+                onClick={() => {
+                  setDraftExcludeDead(excludeDead)
+                  onViewCached()
+                }}
                 disabled={submitting}
                 className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white disabled:opacity-50"
               >
