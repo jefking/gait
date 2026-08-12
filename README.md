@@ -23,8 +23,8 @@ relationship analysis, caching, and background-job work.
 
 First use opens the GitHub PAT dialog and submitting a token starts an
 asynchronous sync. Later page loads immediately use the cached snapshot. The
-header settings or refresh controls reopen GitHub configuration when another
-credentialed sync is wanted.
+server retains the token only in process memory, so refresh can reuse it while
+the app is running. Saving another token in settings replaces the retained one.
 
 The server:
 
@@ -136,7 +136,7 @@ volume contains only app-owned repository clones and reports—not the PAT.
 | `GET` | `/api/identities` | Detected identity classifications and evidence |
 | `PATCH` | `/api/identities/{key}` | Persist a classification, display, or alias override |
 | `GET` | `/api/events` | Live server-sent dashboard invalidations |
-| `POST` | `/api/sync` | Start a background sync with `{ "pat": "…" }` |
+| `POST` | `/api/sync` | Start a background sync; `{ "pat": "…" }` replaces the in-memory token, while `{}` reuses it |
 
 `/api/activity` accepts `group_by=owner|contributor`,
 `metric=commits|pull_requests`, optional numeric `owner_id` and

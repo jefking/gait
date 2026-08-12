@@ -33,6 +33,18 @@ describe('API client', () => {
     }))
   })
 
+  it('requests a refresh without resending a PAT', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ sync: { state: 'discovering' } }), { status: 202 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await startSync()
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({}),
+    }))
+  })
+
   it('subscribes to live dashboard invalidations and closes cleanly', () => {
     class FakeEventSource {
       static instance: FakeEventSource

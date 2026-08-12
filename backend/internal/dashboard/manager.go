@@ -39,6 +39,7 @@ type Manager struct {
 
 	mu                sync.RWMutex
 	status            SyncStatus
+	githubToken       string
 	snapshot          *Snapshot
 	reports           map[int64]RepositoryReport
 	identityOverrides map[string]IdentityOverride
@@ -119,6 +120,9 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 func (manager *Manager) Close() {
 	manager.cancel()
 	manager.wg.Wait()
+	manager.mu.Lock()
+	manager.githubToken = ""
+	manager.mu.Unlock()
 }
 
 func (manager *Manager) Dashboard() DashboardResponse {
@@ -194,14 +198,20 @@ func (manager *Manager) Activity(query ActivityQuery) (ActivityResponse, error) 
 
 func (manager *Manager) Start(token string) (SyncStatus, error) {
 	token = strings.TrimSpace(token)
-	if token == "" {
-		return SyncStatus{}, errors.New("PAT is required")
-	}
 	manager.mu.Lock()
 	if manager.status.Active() {
 		status := cloneSyncStatus(manager.status)
 		manager.mu.Unlock()
 		return status, ErrSyncActive
+	}
+	if token != "" {
+		manager.githubToken = token
+	} else {
+		token = manager.githubToken
+	}
+	if token == "" {
+		manager.mu.Unlock()
+		return SyncStatus{}, errors.New("PAT is required")
 	}
 	now := time.Now().UTC()
 	status := SyncStatus{
