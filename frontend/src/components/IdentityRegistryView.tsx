@@ -89,7 +89,7 @@ export function IdentityRegistryView({ identities, loading, onChange }: Identity
             <UserRound aria-hidden="true" className="size-4" /> Actor classification
           </p>
           <h2 id="identity-registry-title" className="mt-2 text-2xl font-semibold tracking-tight text-white">Identity registry</h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-400">Review each Git identity before Gait builds relationship insights. Drag an actor onto a classification target, or use the buttons on its card.</p>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-400">Classify Git identities to include them in relationship insights. Drag an actor onto a classification target, or use the buttons on its card.</p>
           <p className="mt-2 flex items-center gap-2 text-xs text-slate-600"><Database aria-hidden="true" className="size-3.5" /> Classifications are saved automatically and restored after app restarts.</p>
         </div>
         {!loading && (
@@ -99,7 +99,7 @@ export function IdentityRegistryView({ identities, loading, onChange }: Identity
               : <UserRound aria-hidden="true" className="size-5 shrink-0 text-emerald-300" />}
             <div>
               <p className="text-sm font-semibold">{unknownCount} unknown {unknownCount === 1 ? 'actor' : 'actors'}</p>
-              <p className="text-xs opacity-70">{unknownCount > 0 ? 'Insights unlock when every actor is classified.' : 'All actors are classified.'}</p>
+              <p className="text-xs opacity-70">{unknownCount > 0 ? 'Unclassified actors are excluded from insights.' : 'All actors are included in insights.'}</p>
             </div>
           </div>
         )}

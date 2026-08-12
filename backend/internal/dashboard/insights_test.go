@@ -67,6 +67,51 @@ func TestKnownAgentNamesRequireTrailerEvidence(t *testing.T) {
 	}
 }
 
+func TestUnknownIdentitiesAreExcludedWithoutBlockingKnownInsights(t *testing.T) {
+	at := time.Date(2025, time.January, 1, 9, 0, 0, 0, time.UTC)
+	human := ContributorMetrics{Key: "github:alice", Login: "alice", Name: "Alice"}
+	unknown := ContributorMetrics{Key: "email:mystery@example.com", Name: "Mystery"}
+	reports := map[int64]RepositoryReport{1: {
+		Repository: Repository{ID: 1, FullName: "org/repo", Owner: OwnerIdentity{ID: 2}},
+		Commits: CommitStats{Events: []CommitEvent{
+			{Hash: "known", CommittedAt: at, Author: human},
+			{Hash: "unknown", CommittedAt: at.Add(time.Hour), Author: unknown},
+			{Hash: "partial", CommittedAt: at.Add(2 * time.Hour), Author: human, Participants: []ContributorMetrics{human, unknown}},
+		}},
+	}}
+	query, meta, err := prepareInsightQuery(reports, InsightQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	overview := buildOverview(reports, nil, query, meta)
+	if overview.Meta.Coverage.TotalCommits != 3 || overview.Meta.Coverage.ClassifiedCommits != 2 || overview.Meta.Coverage.UnknownCommits != 1 {
+		t.Fatalf("excluded work was not represented in coverage: %+v", overview.Meta.Coverage)
+	}
+	if len(overview.Timeline) != 1 || overview.Timeline[0].HumanOnly != 2 || overview.Timeline[0].Unknown != 0 {
+		t.Fatalf("unknown work leaked into the timeline: %+v", overview.Timeline)
+	}
+	network := buildNetwork(reports, nil, query, meta)
+	if len(network.Nodes) != 1 || network.Nodes[0].Key != human.Key || len(network.Edges) != 0 {
+		t.Fatalf("unknown actor leaked into the network: %+v", network)
+	}
+
+	rankingQuery := query
+	rankingQuery.Cohort, rankingQuery.Metric = "humans", "commits"
+	rankings, err := buildRankings(reports, nil, rankingQuery, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rankings.Leaderboard) != 1 || rankings.Leaderboard[0].Key != human.Key || rankings.Leaderboard[0].Value != 2 {
+		t.Fatalf("known ranking did not remain available: %+v", rankings.Leaderboard)
+	}
+
+	classifiedOverview := buildOverview(reports, map[string]IdentityOverride{unknown.Key: {Kind: ActorAgent}}, query, meta)
+	if classifiedOverview.Meta.Coverage.UnknownCommits != 0 || classifiedOverview.Meta.Coverage.ClassifiedCommits != 3 || classifiedOverview.Timeline[0].AgentOnly != 1 || classifiedOverview.Timeline[0].Mixed != 1 {
+		t.Fatalf("classified actor did not enter the insight dataset: %+v", classifiedOverview)
+	}
+}
+
 func TestInsightQueryDefaultsToSixMonthsOfHistory(t *testing.T) {
 	reports := map[int64]RepositoryReport{1: {
 		Repository: Repository{ID: 1},
@@ -450,6 +495,16 @@ func TestPullApprovalUsesLatestEligibleIndependentReview(t *testing.T) {
 	if !pullHasApproval(pull) {
 		t.Fatal("eligible independent approval was not detected")
 	}
+	catalog := map[string]*resolvedIdentity{
+		"github:second": {IdentitySummary: IdentitySummary{Kind: ActorUnknown}},
+	}
+	if pullHasKnownApproval(pull, catalog, nil) {
+		t.Fatal("an unclassified reviewer must not contribute approval evidence")
+	}
+	catalog["github:second"].Kind = ActorHuman
+	if !pullHasKnownApproval(pull, catalog, nil) {
+		t.Fatal("a classified independent reviewer should contribute approval evidence")
+	}
 }
 
 func TestPersonMetricsAndIdentityFilters(t *testing.T) {
@@ -463,7 +518,7 @@ func TestPersonMetricsAndIdentityFilters(t *testing.T) {
 	}
 
 	human := &resolvedIdentity{IdentitySummary: IdentitySummary{Kind: ActorHuman}}
-	if !actorFilterMatchesIdentity("", nil) || !actorFilterMatchesIdentity(ActorHuman, human) || actorFilterMatchesIdentity(ActorAgent, human) || actorFilterMatchesIdentity(ActorHuman, nil) {
+	if actorFilterMatchesIdentity("", nil) || !actorFilterMatchesIdentity("", human) || !actorFilterMatchesIdentity(ActorHuman, human) || actorFilterMatchesIdentity(ActorAgent, human) || actorFilterMatchesIdentity(ActorHuman, nil) {
 		t.Fatal("identity actor filter returned unexpected match")
 	}
 }

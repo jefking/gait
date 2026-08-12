@@ -18,6 +18,7 @@ describe('IdentityRegistryView', () => {
     expect(screen.queryByText('Alice Human')).not.toBeInTheDocument()
     expect(screen.queryByText('Helper Agent')).not.toBeInTheDocument()
     expect(screen.getByText(/restored after app restarts/i)).toBeInTheDocument()
+    expect(screen.getByText(/excluded from insights/i)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /Humans\s*1/ }))
     expect(screen.getByText('Alice Human')).toBeInTheDocument()

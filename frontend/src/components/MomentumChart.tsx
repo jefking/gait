@@ -7,8 +7,8 @@ interface MomentumChartProps { overview: OverviewResponse | null; loading: boole
 
 const parseDate = utcParse('%Y-%m-%d')
 const tickDate = utcFormat('%b %Y')
-const workKeys = ['human_only', 'agent_only', 'mixed', 'unknown'] as const
-const workColors = { human_only: '#22d3ee', agent_only: '#8b5cf6', mixed: '#f59e0b', unknown: '#64748b' }
+const workKeys = ['human_only', 'agent_only', 'mixed'] as const
+const workColors = { human_only: '#22d3ee', agent_only: '#8b5cf6', mixed: '#f59e0b' }
 
 export const MomentumChart = memo(function MomentumChart({ overview, loading }: MomentumChartProps) {
   const [view, setView] = useState<'timeline' | 'pulse'>('timeline')
@@ -31,7 +31,7 @@ export const MomentumChart = memo(function MomentumChart({ overview, loading }: 
   )
 })
 
-const labels = { human_only: 'Human-only', agent_only: 'Agent-only', mixed: 'Mixed', unknown: 'Unknown' }
+const labels = { human_only: 'Human-only', agent_only: 'Agent-only', mixed: 'Mixed' }
 
 function Timeline({ overview }: { overview: OverviewResponse }) {
   const bars = useMemo(() => {
@@ -49,7 +49,7 @@ function Timeline({ overview }: { overview: OverviewResponse }) {
       <h3 className="text-sm font-semibold text-slate-200">Commit frequency by work mode</h3>
       <p className="mt-1 text-xs text-slate-500">Buckets adapt from days to weeks and months as the selected range expands.</p>
       <div className="mt-3 overflow-x-auto">
-        <svg viewBox={`0 0 ${bars.width} ${bars.height}`} className="min-w-[720px]" role="img" aria-label="Stacked commit frequency for humans, agents, mixed work, and unknown work">
+        <svg viewBox={`0 0 ${bars.width} ${bars.height}`} className="min-w-[720px]" role="img" aria-label="Stacked commit frequency for classified human, agent, and mixed work">
           {bars.y.ticks(5).map((tick) => <g key={tick}><line x1={bars.margin.left} x2={bars.width - bars.margin.right} y1={bars.y(tick)} y2={bars.y(tick)} stroke="rgba(148,163,184,.12)" /><text x={bars.margin.left - 10} y={bars.y(tick) + 4} textAnchor="end" fill="#64748b" fontSize="11">{tick}</text></g>)}
           {bars.layers.map((layer) => <g key={layer.key} fill={workColors[layer.key as keyof typeof workColors]}>{layer.map((point, index) => <rect key={overview.timeline[index].date} x={bars.x(overview.timeline[index].date)} y={bars.y(point[1])} width={bars.x.bandwidth()} height={Math.max(0, bars.y(point[0]) - bars.y(point[1]))}><title>{overview.timeline[index].date}: {point[1] - point[0]} {labels[layer.key as keyof typeof labels].toLowerCase()} commits</title></rect>)}</g>)}
           <path d={bars.pullLine(overview.timeline) ?? undefined} fill="none" stroke="#f8fafc" strokeWidth="2" strokeDasharray="5 4" vectorEffect="non-scaling-stroke" />
@@ -58,7 +58,7 @@ function Timeline({ overview }: { overview: OverviewResponse }) {
         </svg>
       </div>
       <QualityLines overview={overview} />
-      <div className="sr-only"><table><caption>Human and agent activity over time</caption><thead><tr><th>Date</th><th>Human-only</th><th>Agent-only</th><th>Mixed</th><th>Unknown</th></tr></thead><tbody>{overview.timeline.map((point) => <tr key={point.date}><td>{point.date}</td><td>{point.human_only}</td><td>{point.agent_only}</td><td>{point.mixed}</td><td>{point.unknown}</td></tr>)}</tbody></table></div>
+      <div className="sr-only"><table><caption>Classified human and agent activity over time</caption><thead><tr><th>Date</th><th>Human-only</th><th>Agent-only</th><th>Mixed</th></tr></thead><tbody>{overview.timeline.map((point) => <tr key={point.date}><td>{point.date}</td><td>{point.human_only}</td><td>{point.agent_only}</td><td>{point.mixed}</td></tr>)}</tbody></table></div>
     </div>
   )
 }
@@ -148,6 +148,6 @@ function RepositoryPulseChart({ overview }: { overview: OverviewResponse }) {
   )
 }
 
-function totalPulse(point: { human_only: number; agent_only: number; mixed: number; unknown: number }) { return point.human_only + point.agent_only + point.mixed + point.unknown }
+function totalPulse(point: { human_only: number; agent_only: number; mixed: number }) { return point.human_only + point.agent_only + point.mixed }
 function ViewButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) { return <button type="button" onClick={onClick} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ${active ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>{icon}{label}</button> }
 function Empty() { return <div className="grid min-h-80 place-items-center rounded-2xl border border-dashed border-white/10 text-center"><div><GitCommitHorizontal className="mx-auto size-7 text-slate-600" /><p className="mt-3 text-sm text-slate-400">No event-level activity matches these filters.</p></div></div> }

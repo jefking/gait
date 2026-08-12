@@ -7,7 +7,7 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from 'd3'
-import { Bot, CircleQuestionMark, Maximize2, Move, Network, Pause, Play, UserRound, UsersRound, ZoomIn, ZoomOut } from 'lucide-react'
+import { Bot, CircleQuestionMark, Maximize2, Minimize2, Move, Network, Pause, Play, UserRound, UsersRound, ZoomIn, ZoomOut } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { ActorKind, NetworkEdge, NetworkNode, NetworkResponse } from '../lib/api'
 import { Avatar } from './Avatar'
@@ -60,6 +60,7 @@ const colors: Record<ActorKind, string> = {
 
 export const TeamNetwork = memo(function TeamNetwork({ network, loading, selectedKey, onSelect, onClassify, onRename, onMerge, onUnmerge }: TeamNetworkProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
   const drawNodes = useRef<DrawNode[]>([])
   const drawEdges = useRef<DrawEdge[]>([])
   const positions = useRef(new Map<string, { x: number; y: number }>())
@@ -73,6 +74,7 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
   const [periodIndex, setPeriodIndex] = useState<number>()
   const [playing, setPlaying] = useState(false)
   const [panning, setPanning] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const [selectedPair, setSelectedPair] = useState<string>()
   const selected = network?.nodes.find((node) => node.key === selectedKey)
   const selectedEdge = network?.edges.find((edge) => edgeKey(edge) === selectedPair)
@@ -102,6 +104,26 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
     selectedPairRef.current = selectedPair
     redraw.current()
   }, [selectedKey, selectedPair])
+
+  useEffect(() => {
+    const syncFullscreenState = () => setExpanded(document.fullscreenElement === viewportRef.current)
+    document.addEventListener('fullscreenchange', syncFullscreenState)
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState)
+  }, [])
+
+  useEffect(() => {
+    if (!expanded) return
+    const previousOverflow = document.body.style.overflow
+    const exitOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && document.fullscreenElement !== viewportRef.current) setExpanded(false)
+    }
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', exitOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', exitOnEscape)
+    }
+  }, [expanded])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -209,6 +231,33 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
 
   const fitNetwork = () => applyViewport(fitTransform(drawNodes.current))
 
+  const toggleFullscreen = async () => {
+    const element = viewportRef.current
+    if (!element) return
+    if (expanded) {
+      if (document.fullscreenElement === element && document.exitFullscreen) {
+        try {
+          await document.exitFullscreen()
+        } finally {
+          setExpanded(false)
+        }
+      } else {
+        setExpanded(false)
+      }
+      return
+    }
+    if (element.requestFullscreen) {
+      try {
+        await element.requestFullscreen()
+        setExpanded(true)
+        return
+      } catch {
+        // Fall back to a viewport-filling overlay when native fullscreen is unavailable.
+      }
+    }
+    setExpanded(true)
+  }
+
   const selectFromCanvas = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const { x, y } = worldPoint(event.currentTarget, event.clientX, event.clientY)
     const hitPadding = 8 / viewport.current.scale
@@ -288,7 +337,6 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
         <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
           <Legend kind="human" label="Human" />
           <Legend kind="agent" label="Agent" />
-          <Legend kind="unknown" label="Unknown" />
           {network.meta.truncated && <span className="text-amber-200">Showing 75 of {network.total_identities} identities</span>}
         </div>
         <div className="flex flex-wrap gap-3">
@@ -306,7 +354,7 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
       </div>
       {periods.length > 1 && <div className="no-print mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-white/8 bg-slate-950/50 px-3 py-2"><button type="button" onClick={() => { if (!playing && activePeriodIndex >= periods.length - 1) setPeriodIndex(0); setPlaying((current) => !current) }} disabled={window.matchMedia?.('(prefers-reduced-motion: reduce)').matches} className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-slate-300 disabled:opacity-40">{playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}{playing ? 'Pause' : 'Play'}</button><label className="flex min-w-52 flex-1 items-center gap-3 text-xs text-slate-500">Network period<input aria-label="Network playback period" type="range" min={0} max={periods.length-1} value={activePeriodIndex} onChange={(event) => { setPlaying(false); setPeriodIndex(Number(event.target.value)) }} className="w-full accent-cyan-300" /></label><time className="w-24 text-right text-xs tabular-nums text-slate-400">{activePeriod}</time></div>}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-        <div className="relative min-w-0 overflow-hidden rounded-2xl border border-white/8 bg-slate-950">
+        <div ref={viewportRef} data-testid="team-constellation-viewport" className={`min-w-0 overflow-hidden bg-slate-950 ${expanded ? 'fixed inset-0 z-50 rounded-none border-0' : 'relative rounded-2xl border border-white/8'}`}>
           <canvas
             ref={canvasRef}
             width={width}
@@ -318,14 +366,14 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
             onPointerCancel={cancelPan}
             onWheel={handleWheel}
             onKeyDown={handleCanvasKey}
-            className={`h-auto w-full touch-none outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-300/60 ${panning ? 'cursor-grabbing' : 'cursor-grab'}`}
+            className={`${expanded ? 'h-full' : 'h-auto'} w-full touch-none outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-300/60 ${panning ? 'cursor-grabbing' : 'cursor-grab'}`}
             aria-label="Interactive team constellation. Human nodes contain a user icon and agent nodes contain a bot icon."
             aria-describedby="team-constellation-help"
           />
           <div className="no-print absolute right-3 top-3 flex gap-1 rounded-2xl border border-white/10 bg-slate-950/85 p-1.5 shadow-xl backdrop-blur" aria-label="Constellation view controls">
             <button type="button" onClick={() => zoomAt(width / 2, height / 2, 1.25)} aria-label="Zoom in team constellation" title="Zoom in" className="grid size-11 place-items-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white"><ZoomIn aria-hidden="true" className="size-5" /></button>
             <button type="button" onClick={() => zoomAt(width / 2, height / 2, 0.8)} aria-label="Zoom out team constellation" title="Zoom out" className="grid size-11 place-items-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white"><ZoomOut aria-hidden="true" className="size-5" /></button>
-            <button type="button" onClick={fitNetwork} aria-label="Fit team constellation to view" title="Fit to view" className="grid size-11 place-items-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white"><Maximize2 aria-hidden="true" className="size-5" /></button>
+            <button type="button" onClick={() => void toggleFullscreen()} aria-label={expanded ? 'Exit full screen team constellation' : 'Expand team constellation to full screen'} aria-pressed={expanded} title={expanded ? 'Exit full screen' : 'Full screen'} className="grid size-11 place-items-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white">{expanded ? <Minimize2 aria-hidden="true" className="size-5" /> : <Maximize2 aria-hidden="true" className="size-5" />}</button>
           </div>
           <p id="team-constellation-help" className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-2 rounded-xl border border-white/8 bg-slate-950/80 px-3 py-2 text-xs text-slate-400 backdrop-blur"><Move aria-hidden="true" className="size-4 text-cyan-300" /> Drag to pan · Scroll to zoom</p>
         </div>

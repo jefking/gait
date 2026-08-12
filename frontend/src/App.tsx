@@ -129,8 +129,7 @@ function App() {
   const identitiesLoading = Boolean(snapshotGeneratedAt) && !identityResult
   const selectedFrom = dateRange?.userSelected ? dateRange.from : undefined
   const selectedTo = dateRange?.userSelected ? dateRange.to : undefined
-  const identitiesClassified = !identitiesLoading && identities.every((identity) => identity.kind !== 'unknown')
-  const insightScopeKey = dashboard?.snapshot && identitiesClassified
+  const insightScopeKey = dashboard?.snapshot
     ? [ownerId ?? '', repositoryId ?? '', actorKind ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? '', windows.sessionHours, windows.adoptionDays, windows.survivalDays].join(':')
     : ''
   const insightRequestKey = insightScopeKey && contentGeneration

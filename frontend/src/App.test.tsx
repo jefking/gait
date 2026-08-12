@@ -307,7 +307,7 @@ describe('App', () => {
     expect(screen.getByLabelText('Loading rank trajectories')).toBeInTheDocument()
   })
 
-  it('holds insights until every identity is classified', async () => {
+  it('keeps insights available while unresolved identities remain excluded', async () => {
     const unresolved: IdentitySummary = {
       key: 'mystery', canonical_key: 'mystery', name: 'Mystery Actor', kind: 'unknown', evidence: 'unverified_git_identity', confidence: 'unknown', commits: 2, pull_requests: 0, reviews: 0,
     }
@@ -315,14 +315,13 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
-    expect(await screen.findByRole('heading', { name: 'Identity registry' })).toBeInTheDocument()
-    expect(screen.queryByText('Team constellation')).not.toBeInTheDocument()
-    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/insights/'))).toBe(false)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Classify Mystery Actor as Human' }))
-
     expect(await screen.findByText('Team constellation')).toBeInTheDocument()
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/insights/'))).toBe(true))
+
+    fireEvent.click(await screen.findByRole('button', { name: /1 unknown actor/i }))
+
+    expect(await screen.findByRole('heading', { name: 'Identity registry' })).toBeInTheDocument()
+    expect(screen.getByText('Mystery Actor')).toBeInTheDocument()
   })
 })
 

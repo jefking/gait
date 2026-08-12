@@ -6,11 +6,12 @@ each repository up to date, analyzes default-branch history with
 [`git-changes-by-day`](https://github.com/moltenbot000/git-changes-by-day), and
 combines the result with GitHub pull request history.
 
-The graph-first React dashboard classifies evidence-backed human, agent, mixed,
-and unknown work; maps collaboration; compares observed human-to-agent handoffs
-and adoption windows; and shows frequency, quality proxies, repository pulses,
-and metric-led ranks over time. The Go server performs all GitHub, Git,
-relationship analysis, caching, and background-job work.
+The graph-first React dashboard classifies evidence-backed human, agent, and mixed
+work; maps collaboration; compares observed human-to-agent handoffs and adoption
+windows; and shows frequency, quality proxies, repository pulses, and metric-led
+ranks over time. Unclassified actors remain in the identity registry but are excluded
+from insights until classified. The Go server performs all GitHub, Git, relationship
+analysis, caching, and background-job work.
 
 ## Stack
 

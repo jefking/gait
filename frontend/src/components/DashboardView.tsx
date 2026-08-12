@@ -79,14 +79,13 @@ export function DashboardView({
   const mergeIdentity = useCallback((key: string, canonical_key: string) => onIdentityChange(key, { canonical_key }), [onIdentityChange])
   const unmergeIdentity = useCallback((key: string) => onIdentityChange(key, { unmerge: true }), [onIdentityChange])
   const unknownIdentities = identities.filter((identity) => identity.kind === 'unknown').length
-  const registryRequired = identitiesLoading || unknownIdentities > 0
-  const activeView = registryRequired ? 'identities' : view
+  const activeView = view
   const repositories = snapshot.repositories.filter((repo) => (!ownerId || repo.owner.id === ownerId) && (!excludeDead || !repo.liveness?.is_dead))
   const meta = insights.overview?.meta
   const summary = insights.overview?.summary
   const coverage = meta?.coverage
   const period = meta?.from && meta.to ? `${meta.from} → ${meta.to}` : 'All available history'
-  const attribution = `${coverage?.unknown_commits ?? 0} unknown`
+  const attribution = `${coverage?.unknown_commits ?? 0} excluded`
   const cards = [
     { label: 'Agent participation', value: summary ? percent.format(summary.agent_participation) : '—', detail: `${coverage?.classified_commits ?? 0} classified · ${period} · ${attribution}`, icon: Bot, tone: 'text-violet-300' },
     { label: 'Observed handoff lift', value: summary?.handoff_lift === undefined ? '—' : percent.format(summary.handoff_lift), detail: `${summary?.handoff_episodes ?? 0} episodes · ${sessionHours}h windows · ${attribution}`, icon: GitBranch, tone: summary?.handoff_lift !== undefined && summary.handoff_lift >= 0 ? 'text-emerald-300' : 'text-rose-300' },
@@ -104,9 +103,9 @@ export function DashboardView({
       <SyncNotification sync={sync} />
 
       <nav className="no-print mt-4 flex flex-wrap items-center gap-2" aria-label="Primary views">
-        <button type="button" disabled={registryRequired} title={registryRequired ? 'Classify every unknown actor to unlock insights' : undefined} onClick={() => setView('dashboard')} className={`inline-flex min-h-11 items-center gap-2 rounded-xl border px-4 text-sm font-medium transition disabled:cursor-not-allowed ${activeView === 'dashboard' ? 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100' : 'border-white/8 bg-slate-900/55 text-slate-400 hover:border-white/15 hover:text-slate-200 disabled:opacity-50'}`}><LayoutDashboard aria-hidden="true" className="size-4" /> Insights</button>
+        <button type="button" onClick={() => setView('dashboard')} className={`inline-flex min-h-11 items-center gap-2 rounded-xl border px-4 text-sm font-medium transition ${activeView === 'dashboard' ? 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100' : 'border-white/8 bg-slate-900/55 text-slate-400 hover:border-white/15 hover:text-slate-200'}`}><LayoutDashboard aria-hidden="true" className="size-4" /> Insights</button>
         <button type="button" onClick={() => setView('identities')} className={`inline-flex min-h-11 items-center gap-2 rounded-xl border px-4 text-sm font-medium transition ${activeView === 'identities' ? 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100' : 'border-white/8 bg-slate-900/55 text-slate-400 hover:border-white/15 hover:text-slate-200'}`}><Fingerprint aria-hidden="true" className="size-4" /> Identity registry<span className="rounded-full bg-black/20 px-2 py-0.5 text-xs tabular-nums">{identities.length}</span></button>
-        {!identitiesLoading && unknownIdentities > 0 && <span className="ml-auto inline-flex min-h-11 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] px-3.5 text-sm font-medium text-amber-100"><CircleQuestionMark aria-hidden="true" className="size-4 text-amber-300" /> {unknownIdentities} unknown {unknownIdentities === 1 ? 'actor' : 'actors'}</span>}
+        {!identitiesLoading && unknownIdentities > 0 && <button type="button" onClick={() => setView('identities')} className="ml-auto inline-flex min-h-11 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] px-3.5 text-left text-sm font-medium text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-300/10"><CircleQuestionMark aria-hidden="true" className="size-4 shrink-0 text-amber-300" /><span>{unknownIdentities} unknown {unknownIdentities === 1 ? 'actor' : 'actors'}<span className="ml-1 font-normal text-amber-100/60">· excluded from insights</span></span></button>}
       </nav>
 
       {activeView === 'identities' ? (
@@ -117,7 +116,7 @@ export function DashboardView({
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_2fr]">
           <OwnerSelect owners={snapshot.owners} value={ownerId} onChange={(next) => { onOwnerChange(next); if (repositoryId && !snapshot.repositories.some((repo) => repo.id === repositoryId && (!next || repo.owner.id === next))) onRepositoryChange(undefined) }} />
           <label className="block text-xs font-medium text-slate-500">Repository<select value={repositoryId ?? ''} onChange={(event) => onRepositoryChange(event.target.value ? Number(event.target.value) : undefined)} className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-200"><option value="">All repositories</option>{repositories.map((repo) => <option key={repo.id} value={repo.id}>{repo.name}</option>)}</select></label>
-          <label className="block text-xs font-medium text-slate-500">Actor type<select value={actorKind ?? ''} onChange={(event) => onActorKindChange(event.target.value ? event.target.value as ActorKind : undefined)} className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-200"><option value="">Humans + agents + unknown</option><option value="human">Human participation</option><option value="agent">Agent participation</option><option value="unknown">Unknown attribution</option></select></label>
+          <label className="block text-xs font-medium text-slate-500">Actor type<select value={actorKind ?? ''} onChange={(event) => onActorKindChange(event.target.value ? event.target.value as ActorKind : undefined)} className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-200"><option value="">Humans + agents</option><option value="human">Human participation</option><option value="agent">Agent participation</option></select></label>
           <details className="rounded-xl border border-white/8 bg-slate-950/55 px-4 py-2.5"><summary className="cursor-pointer text-xs font-medium text-slate-400">Advanced windows · {sessionHours}h sessions · {adoptionDays}d adoption · {survivalDays}d quality</summary><div className="mt-4 grid gap-4 sm:grid-cols-3"><WindowInput label="Session hours" min={1} max={168} value={sessionHours} onChange={(value) => onWindowsChange({ sessionHours:value,adoptionDays,survivalDays })} /><WindowInput label="Adoption days" min={7} max={180} value={adoptionDays} onChange={(value) => onWindowsChange({ sessionHours,adoptionDays:value,survivalDays })} /><WindowInput label="Survival days" min={7} max={180} value={survivalDays} onChange={(value) => onWindowsChange({ sessionHours,adoptionDays,survivalDays:value })} /></div></details>
         </div>
         <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-slate-950/45 px-3 py-2 text-xs text-slate-500">
@@ -149,7 +148,7 @@ export function DashboardView({
         <RankChart rankings={insights.rankings} loading={insightsLoading.rankings} />
       </GraphSection>
 
-      <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/8 pt-5 text-xs text-slate-600"><p>{coverage?.unknown_commits ?? 0} commits remain unknown · classifications are evidence-based and editable.</p><p>Observed associations are not causal claims.</p></footer>
+      <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/8 pt-5 text-xs text-slate-600"><p>{coverage?.unknown_commits ?? 0} commits excluded pending actor classification · classifications are evidence-based and editable.</p><p>Observed associations are not causal claims.</p></footer>
       </>}
     </div>
   )

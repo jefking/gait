@@ -959,7 +959,7 @@ func insightCoverage(reports map[int64]RepositoryReport, overrides map[string]Id
 				continue
 			}
 			coverage.EligiblePulls++
-			if pull.MergedAt != nil && pullHasApproval(pull) {
+			if pull.MergedAt != nil && pullHasKnownApproval(pull, catalog, overrides) {
 				coverage.ReviewedPulls++
 			}
 		}
@@ -1260,7 +1260,7 @@ func buildOverview(reports map[int64]RepositoryReport, overrides map[string]Iden
 					if pull.MergedAt != nil {
 						qa.mergedPulls++
 						qa.mergeHours = append(qa.mergeHours, pull.MergedAt.Sub(pull.CreatedAt).Hours())
-						if pullHasApproval(pull) {
+						if pullHasKnownApproval(pull, catalog, overrides) {
 							qa.approvedMerged++
 						}
 					}
@@ -1703,6 +1703,16 @@ func eventIsExplicitRevert(event CommitEvent) bool {
 }
 
 func pullHasApproval(pull PullRequest) bool {
+	return pullHasApprovalFrom(pull, nil)
+}
+
+func pullHasKnownApproval(pull PullRequest, catalog map[string]*resolvedIdentity, overrides map[string]IdentityOverride) bool {
+	return pullHasApprovalFrom(pull, func(person Person) bool {
+		return isKnownIdentity(catalog[canonicalIdentityKey(personMetrics(person).Key, overrides)])
+	})
+}
+
+func pullHasApprovalFrom(pull PullRequest, eligible func(Person) bool) bool {
 	latest := make(map[string]string)
 	authorKey := strings.ToLower(strings.TrimSpace(pull.Author.Login))
 	for _, review := range pull.Reviews {
@@ -1710,7 +1720,7 @@ func pullHasApproval(pull PullRequest) bool {
 			continue
 		}
 		key := strings.ToLower(strings.TrimSpace(review.Author.Login))
-		if key == "" || key == authorKey {
+		if key == "" || key == authorKey || eligible != nil && !eligible(review.Author) {
 			continue
 		}
 		latest[key] = strings.ToUpper(strings.TrimSpace(review.State))
