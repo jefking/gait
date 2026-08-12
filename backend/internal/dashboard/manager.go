@@ -21,6 +21,7 @@ type GitHubFactory func(string, RateLimitCallbacks) (GitHubService, error)
 type ManagerConfig struct {
 	DataDir       string
 	Concurrency   int
+	GitHubToken   string
 	GitHubBaseURL string
 	HTTPClient    *http.Client
 	Runner        RepositoryRunner
@@ -109,6 +110,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		ctx:               ctx,
 		cancel:            cancel,
 		status:            SyncStatus{State: SyncIdle, Warnings: warnings},
+		githubToken:       strings.TrimSpace(config.GitHubToken),
 		snapshot:          snapshot,
 		reports:           reports,
 		identityOverrides: identityOverrides,
