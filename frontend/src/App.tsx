@@ -1,4 +1,4 @@
-import { Activity, Database, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react'
+import { Database, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { DashboardView } from './components/DashboardView'
 import { TokenModal } from './components/TokenModal'
@@ -292,7 +292,9 @@ function EmptyDashboard({
     <div className="relative mx-auto grid min-h-screen max-w-2xl place-items-center px-6 py-20 text-center">
       <div>
         <div className="mx-auto grid size-16 place-items-center rounded-3xl bg-cyan-300 text-slate-950 shadow-2xl shadow-cyan-400/15">
-          {active || loading ? <LoaderCircle aria-hidden="true" className="size-8 animate-spin" /> : <Activity aria-hidden="true" className="size-8" />}
+          {active || loading
+            ? <LoaderCircle aria-hidden="true" className="size-8 animate-spin" />
+            : <img src="/images/github.svg" alt="" aria-hidden="true" className="size-9 object-contain" />}
         </div>
         <h1 className="mt-7 text-4xl font-semibold tracking-tight text-white">Your Git history, in motion.</h1>
         <p className="mx-auto mt-4 max-w-lg text-base leading-7 text-slate-400">

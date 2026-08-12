@@ -3,6 +3,21 @@ import { describe, expect, it, vi } from 'vitest'
 import { TokenModal } from './TokenModal'
 
 describe('TokenModal', () => {
+  it('uses the GitHub brand mark for GitHub configuration', () => {
+    const { container } = render(
+      <TokenModal
+        open
+        mode="settings"
+        hasCachedData
+        submitting={false}
+        onSubmit={vi.fn()}
+        onViewCached={vi.fn()}
+      />,
+    )
+
+    expect(container.querySelectorAll('img[src="/images/github.svg"]')).toHaveLength(2)
+  })
+
   it('clears the PAT immediately and sends it only to the submit callback', async () => {
     const submit = vi.fn().mockResolvedValue(undefined)
     render(

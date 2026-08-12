@@ -1,4 +1,4 @@
-import { GitBranch, KeyRound, LoaderCircle, ShieldCheck, SlidersHorizontal } from 'lucide-react'
+import { KeyRound, LoaderCircle, ShieldCheck, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
@@ -12,6 +12,10 @@ interface TokenModalProps {
   onExcludeDeadChange?: (exclude: boolean) => void
   onSubmit: (pat: string) => Promise<void>
   onViewCached: () => void
+}
+
+function GitHubMark({ className }: { className?: string }) {
+  return <img src="/images/github.svg" alt="" aria-hidden="true" className={className} />
 }
 
 export function TokenModal({
@@ -55,7 +59,7 @@ export function TokenModal({
       >
         <div className="border-b border-white/10 bg-gradient-to-br from-cyan-400/10 via-transparent to-indigo-500/10 px-6 py-7 sm:px-8">
           <div className="mb-5 flex size-12 items-center justify-center rounded-2xl bg-cyan-400/10 text-cyan-300 ring-1 ring-cyan-300/20">
-            <GitBranch aria-hidden="true" className="size-6" />
+            <GitHubMark className="size-7 object-contain invert" />
           </div>
           <h1 id="pat-title" className="text-2xl font-semibold tracking-tight text-white">
             {mode === 'settings' ? 'Settings' : 'Connect your GitHub history'}
@@ -69,7 +73,7 @@ export function TokenModal({
 
         {mode === 'settings' && (
           <div role="tablist" aria-label="Settings sections" className="flex gap-1 border-b border-white/10 px-6 pt-3 sm:px-8">
-            {([['github', GitBranch, 'GitHub'], ['projects', SlidersHorizontal, 'Projects']] as const).map(([tab, Icon, label]) => (
+            {([['github', GitHubMark, 'GitHub'], ['projects', SlidersHorizontal, 'Projects']] as const).map(([tab, Icon, label]) => (
               <button
                 key={tab}
                 type="button"
@@ -78,7 +82,7 @@ export function TokenModal({
                 onClick={() => setActiveTab(tab)}
                 className={`inline-flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition ${activeTab === tab ? 'border-cyan-300 text-cyan-200' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
               >
-                <Icon aria-hidden="true" className="size-4" />
+                <Icon aria-hidden="true" className={tab === 'github' ? 'size-4 object-contain invert' : 'size-4'} />
                 {label}
               </button>
             ))}
