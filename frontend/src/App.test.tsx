@@ -190,7 +190,7 @@ describe('App', () => {
     expect(screen.queryByText('Team constellation')).not.toBeInTheDocument()
     expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/insights/'))).toBe(false)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Classify Mystery Actor as Human' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Classify Mystery Actor as Human' }))
 
     expect(await screen.findByText('Team constellation')).toBeInTheDocument()
     expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/insights/'))).toBe(true)

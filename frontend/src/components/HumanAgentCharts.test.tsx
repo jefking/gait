@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { NetworkResponse, OverviewResponse, RampResponse, RankingResponse } from '../lib/api'
 import { MomentumChart } from './MomentumChart'
 import { RampChart } from './RampChart'
@@ -28,6 +28,11 @@ const overview: OverviewResponse = {
   ] }],
 }
 
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
 describe('Human × Agent charts', () => {
   it('switches the coordinated momentum view to repository pulse', () => {
     render(<MomentumChart overview={overview} loading={false} />)
@@ -53,6 +58,28 @@ describe('Human × Agent charts', () => {
     expect(screen.getByText('Rank over time')).toBeInTheDocument()
     expect(screen.getByText('Current leaderboard')).toBeInTheDocument()
     expect(screen.getAllByText('Helper').length).toBeGreaterThan(0)
+  })
+
+  it('expands the rank plot to use additional vertical space', async () => {
+    const originalBounds = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === 'rank-trajectory-plot') {
+        return { x: 0, y: 0, width: 820, height: 900, top: 0, right: 820, bottom: 900, left: 0, toJSON: () => ({}) }
+      }
+      return originalBounds.call(this)
+    })
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      disconnect() {}
+    })
+    const rankings: RankingResponse = { meta, cohort: 'agents', metric: 'commits', favorable_direction: 'higher', leaderboard: [{ key: 'helper', label: 'Helper', kind: 'agent', rank: 1, value: 5, eligible: true, metrics: { commits: 5 } }], trajectories: [{ key: 'helper', label: 'Helper', points: [{ date: '2025-01-01', rank: 1, value: 5 }] }] }
+
+    render(<RankChart rankings={rankings} loading={false} />)
+
+    const chart = screen.getByRole('img', { name: 'agents rank trajectories by commits' })
+    await waitFor(() => expect(chart).toHaveAttribute('height', '900'))
+    expect(chart).toHaveAttribute('width', '820')
+    expect(screen.getByTestId('rank-trajectory-plot')).toHaveClass('flex-1')
   })
 
   it('supports inline identity correction in the constellation detail', () => {
