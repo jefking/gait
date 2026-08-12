@@ -319,3 +319,33 @@ func TestPullApprovalUsesLatestEligibleIndependentReview(t *testing.T) {
 		t.Fatal("eligible independent approval was not detected")
 	}
 }
+
+func TestPersonMetricsAndIdentityFilters(t *testing.T) {
+	person := personMetrics(Person{Login: " Alex ", AvatarURL: "avatar", Type: "User"})
+	if person.Key != "github:alex" || person.Login != "Alex" || person.Name != "Alex" || person.AvatarURL != "avatar" || person.Type != "User" {
+		t.Fatalf("unexpected person metrics: %+v", person)
+	}
+	unknown := personMetrics(Person{Name: "Anonymous"})
+	if unknown.Key != "git:unknown" || unknown.Name != "Anonymous" {
+		t.Fatalf("unexpected anonymous metrics: %+v", unknown)
+	}
+
+	human := &resolvedIdentity{IdentitySummary: IdentitySummary{Kind: ActorHuman}}
+	if !actorFilterMatchesIdentity("", nil) || !actorFilterMatchesIdentity(ActorHuman, human) || actorFilterMatchesIdentity(ActorAgent, human) || actorFilterMatchesIdentity(ActorHuman, nil) {
+		t.Fatal("identity actor filter returned unexpected match")
+	}
+}
+
+func TestPullResolvedAtPrefersMergeTime(t *testing.T) {
+	merged := time.Date(2025, time.January, 2, 0, 0, 0, 0, time.UTC)
+	closed := merged.Add(time.Hour)
+	if got := pullResolvedAt(PullRequest{MergedAt: &merged, ClosedAt: &closed}); got != &merged {
+		t.Fatalf("merge time not preferred: %v", got)
+	}
+	if got := pullResolvedAt(PullRequest{ClosedAt: &closed}); got != &closed {
+		t.Fatalf("close time not returned: %v", got)
+	}
+	if got := pullResolvedAt(PullRequest{}); got != nil {
+		t.Fatalf("open pull unexpectedly resolved at %v", got)
+	}
+}
