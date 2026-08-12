@@ -875,6 +875,7 @@ func insightCoverage(reports map[int64]RepositoryReport, overrides map[string]Id
 		return coverage
 	}
 	catalog := buildIdentityCatalog(reports, overrides)
+	aliases := identityAliasIndex(catalog)
 	maturityCutoff := insightMaturityCutoff(query)
 	for _, report := range reports {
 		if !insightReportMatches(report, query) {
@@ -884,7 +885,7 @@ func insightCoverage(reports map[int64]RepositoryReport, overrides map[string]Id
 			if !inInsightRange(event.CommittedAt, query) {
 				continue
 			}
-			bucket := workBucket(eventIdentities(event, catalog, overrides))
+			bucket := workBucket(eventIdentities(event, catalog, aliases, overrides))
 			if !actorFilterMatchesBucket(query.ActorKind, bucket) {
 				continue
 			}
@@ -935,6 +936,7 @@ func buildNetwork(reports map[int64]RepositoryReport, overrides map[string]Ident
 func buildNetworkWithLimit(reports map[int64]RepositoryReport, overrides map[string]IdentityOverride, query InsightQuery, meta InsightMeta, maximumNodes int) NetworkResponse {
 	meta.Coverage = insightCoverage(reports, overrides, query)
 	catalog := buildIdentityCatalog(reports, overrides)
+	aliases := identityAliasIndex(catalog)
 	for _, identity := range catalog {
 		identity.Commits, identity.PullRequests, identity.Reviews = 0, 0, 0
 	}
@@ -971,7 +973,7 @@ func buildNetworkWithLimit(reports map[int64]RepositoryReport, overrides map[str
 			if !inInsightRange(event.CommittedAt, query) {
 				continue
 			}
-			participants := eventIdentities(*event, catalog, overrides)
+			participants := eventIdentities(*event, catalog, aliases, overrides)
 			for _, identity := range participants {
 				identity.Commits++
 			}
@@ -983,7 +985,7 @@ func buildNetworkWithLimit(reports map[int64]RepositoryReport, overrides map[str
 				}
 			}
 			if previous != nil && event.CommittedAt.Sub(previous.CommittedAt) <= session {
-				prevParticipants := eventIdentities(*previous, catalog, overrides)
+				prevParticipants := eventIdentities(*previous, catalog, aliases, overrides)
 				if len(prevParticipants) > 0 && len(participants) > 0 {
 					if edge := ensureEdge(prevParticipants[0], participants[0], report.Repository.FullName, event.CommittedAt); edge != nil {
 						edge.Handoffs++
@@ -1114,6 +1116,7 @@ func buildOverview(reports map[int64]RepositoryReport, overrides map[string]Iden
 		return result
 	}
 	catalog := buildIdentityCatalog(reports, overrides)
+	aliases := identityAliasIndex(catalog)
 	maturityCutoff := insightMaturityCutoff(query)
 	timeline := make(map[string]*TimelinePoint)
 	quality := make(map[string]*qualityAccumulator)
@@ -1134,7 +1137,7 @@ func buildOverview(reports map[int64]RepositoryReport, overrides map[string]Iden
 			if !inInsightRange(event.CommittedAt, query) {
 				continue
 			}
-			kind := workBucket(eventIdentities(event, catalog, overrides))
+			kind := workBucket(eventIdentities(event, catalog, aliases, overrides))
 			if !actorFilterMatchesBucket(query.ActorKind, kind) {
 				continue
 			}
@@ -1300,6 +1303,7 @@ func buildRamps(reports map[int64]RepositoryReport, overrides map[string]Identit
 		return result
 	}
 	catalog := buildIdentityCatalog(reports, overrides)
+	aliases := identityAliasIndex(catalog)
 	maturityCutoff := insightMaturityCutoff(query)
 	type rampAccumulator struct {
 		human, agent             *resolvedIdentity
@@ -1319,7 +1323,7 @@ func buildRamps(reports map[int64]RepositoryReport, overrides map[string]Identit
 			if !inInsightRange(allEvents[i].CommittedAt, query) {
 				continue
 			}
-			previousIDs, currentIDs := eventIdentities(allEvents[i-1], catalog, overrides), eventIdentities(allEvents[i], catalog, overrides)
+			previousIDs, currentIDs := eventIdentities(allEvents[i-1], catalog, aliases, overrides), eventIdentities(allEvents[i], catalog, aliases, overrides)
 			if len(previousIDs) == 0 || len(currentIDs) == 0 || previousIDs[0].Kind != ActorHuman || currentIDs[0].Kind != ActorAgent || allEvents[i].CommittedAt.Sub(allEvents[i-1].CommittedAt) > session {
 				continue
 			}
@@ -1352,7 +1356,7 @@ func buildRamps(reports map[int64]RepositoryReport, overrides map[string]Identit
 		}
 		var adoptionIndex = -1
 		for i, event := range allEvents {
-			for _, identity := range eventIdentities(event, catalog, overrides) {
+			for _, identity := range eventIdentities(event, catalog, aliases, overrides) {
 				if identity.Kind == ActorAgent && identity.Confidence == "confirmed" {
 					adoptionIndex = i
 					break
@@ -1512,6 +1516,7 @@ func rankValues(reports map[int64]RepositoryReport, overrides map[string]Identit
 		return values, labels, kinds, metrics
 	}
 	catalog := buildIdentityCatalog(reports, overrides)
+	aliases := identityAliasIndex(catalog)
 	totals := make(map[string]float64)
 	matureTotals := make(map[string]float64)
 	reverts := make(map[string]float64)
@@ -1528,7 +1533,7 @@ func rankValues(reports map[int64]RepositoryReport, overrides map[string]Identit
 			if !inInsightRange(event.CommittedAt, query) {
 				continue
 			}
-			participants := eventIdentities(event, catalog, overrides)
+			participants := eventIdentities(event, catalog, aliases, overrides)
 			mature := !maturityCutoff.IsZero() && !dayUTC(event.CommittedAt.AddDate(0, 0, query.SurvivalDays)).After(maturityCutoff)
 			for _, identity := range participants {
 				if (query.Cohort == "humans" && identity.Kind != ActorHuman) || (query.Cohort == "agents" && identity.Kind != ActorAgent) {

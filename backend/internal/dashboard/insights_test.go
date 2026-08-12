@@ -175,6 +175,10 @@ func TestStableEmailIdentityReusesLegacyClassificationAndMerge(t *testing.T) {
 	if _, exists := identity.aliases["git:alex"]; !exists {
 		t.Fatalf("legacy override alias was not retained: %#v", identity.aliases)
 	}
+	resolved := eventIdentities(reports[1].Commits.Events[2], catalog, identityAliasIndex(catalog), overrides)
+	if len(resolved) != 1 || resolved[0].Key != "github:alex" {
+		t.Fatalf("alternate display name did not resolve through the stable alias: %#v", resolved)
+	}
 }
 
 func TestStableEmailIdentityIgnoresConflictingLegacyMergeTargets(t *testing.T) {

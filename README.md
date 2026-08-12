@@ -31,7 +31,8 @@ The server:
 1. Fetches the authenticated user and all repositories visible to the PAT.
 2. Clones new repositories and fetches existing app-owned clones using four
    concurrent workers by default.
-3. Checks out the latest default branch and runs `git-changes-by-day`.
+3. Checks out the latest default branch and runs `git-changes-by-day`, keying commit
+   actors by a verified GitHub handle when available and normalized author email otherwise.
 4. Enriches commit events with full messages, parents, and touched paths, then
    publishes commit statistics immediately.
 5. Fetches pull requests and review evidence on first use and only updated pull
