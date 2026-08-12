@@ -162,8 +162,8 @@ function App() {
                   userSelected: true,
                 }
               : {
-                  from: overview.meta.available_from!,
-                  to: overview.meta.available_to!,
+                  from: overview.meta.from ?? overview.meta.available_from!,
+                  to: overview.meta.to ?? overview.meta.available_to!,
                   userSelected: false,
                 },
           )

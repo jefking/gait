@@ -2,6 +2,7 @@ import { brushX, scaleUtc, select, type D3BrushEvent } from 'd3'
 import { CalendarRange } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ActivityGranularity } from '../lib/api'
+import { addUTCMonths } from '../lib/dates'
 
 interface DateRangeSliderProps {
   availableFrom: string
@@ -22,6 +23,7 @@ const dayMilliseconds = 24 * 60 * 60 * 1000
 const rangePresets = [
   { id: 'week', label: '7 days', start: (maximum: Date) => addDays(maximum, -6) },
   { id: 'month', label: '31 days', start: (maximum: Date) => addDays(maximum, -30) },
+  { id: 'six-months', label: '6 months', start: (maximum: Date) => addUTCMonths(maximum, -6) },
   { id: 'year', label: '1 year', start: (maximum: Date) => addYears(maximum, -1) },
 ] as const
 
