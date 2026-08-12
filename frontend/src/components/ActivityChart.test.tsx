@@ -45,4 +45,38 @@ describe('ActivityChart', () => {
     render(<ActivityChart activity={{ ...activity, series: [] }} loading={false} />)
     expect(screen.getByText('No activity matches these filters.')).toBeInTheDocument()
   })
+
+  it('keeps the selected owner plotted after changing a multi-owner selection', () => {
+    const multiOwnerActivity: ActivityResponse = {
+      ...activity,
+      series: [
+        { key: 'one', label: 'One', total: 4, points: [{ date: '2024-01-01', value: 4 }] },
+        { key: 'molten', label: 'Molten-Bot', total: 12, points: [{ date: '2024-01-01', value: 5 }, { date: '2024-02-01', value: 7 }] },
+        { key: 'three', label: 'Three', total: 2, points: [{ date: '2024-02-01', value: 2 }] },
+      ],
+    }
+    const { container } = render(<ActivityChart activity={multiOwnerActivity} loading={false} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /One/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Three/ }))
+
+    expect(screen.getByRole('button', { name: /Molten-Bot/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(container.querySelectorAll('path[stroke-width="2.5"]')).toHaveLength(1)
+    expect(container.querySelector('path[data-series-key="molten"]')).toHaveAttribute('d', expect.stringContaining('L'))
+    expect(screen.queryByText('1')).not.toBeInTheDocument()
+  })
+
+  it('plots compatibility points that provide a month instead of a date', () => {
+    const compatibilityActivity: ActivityResponse = {
+      ...activity,
+      series: [{
+        key: 'legacy',
+        label: 'Legacy owner',
+        total: 9,
+        points: [{ month: '2024-01', value: 4 }, { month: '2024-02', value: 5 }],
+      }],
+    }
+    const { container } = render(<ActivityChart activity={compatibilityActivity} loading={false} />)
+    expect(container.querySelector('path[data-series-key="legacy"]')).toHaveAttribute('d', expect.stringContaining('L'))
+  })
 })

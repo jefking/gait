@@ -137,7 +137,8 @@ export type ActivityMetric = 'commits' | 'pull_requests'
 export type ActivityGranularity = 'day' | 'week' | 'month'
 
 export interface ActivityPoint {
-  date: string
+  date?: string
+  month?: string
   value: number
 }
 

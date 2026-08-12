@@ -26,26 +26,30 @@ const compactNumber = new Intl.NumberFormat(undefined, { notation: 'compact' })
 
 export function ActivityChart({ activity, loading }: ActivityChartProps) {
   const visibilityScope = `${activity?.group_by ?? ''}:${activity?.metric ?? ''}:${activity?.series.map((series) => series.key).join(',') ?? ''}`
-  const [visibility, setVisibility] = useState<{ scope: string; hidden: Set<string> }>({
+  const [visibility, setVisibility] = useState<{ scope: string; selected: Set<string> }>({
     scope: visibilityScope,
-    hidden: new Set(),
+    selected: new Set(activity?.series.map((series) => series.key) ?? []),
   })
-  const hidden = useMemo(
-    () => (visibility.scope === visibilityScope ? visibility.hidden : new Set<string>()),
-    [visibility, visibilityScope],
+  const selected = useMemo(
+    () => visibility.scope === visibilityScope
+      ? visibility.selected
+      : new Set(activity?.series.map((series) => series.key) ?? []),
+    [activity?.series, visibility, visibilityScope],
   )
 
   const chart = useMemo(() => {
     const width = 960
     const height = 340
     const margin = { top: 20, right: 22, bottom: 42, left: 58 }
-    const visible = (activity?.series ?? []).filter((series) => !hidden.has(series.key))
-    const datedPoints = visible.flatMap((series) =>
-      series.points.flatMap((point) => {
-        const date = parseDate(point.date)
+    const prepared = (activity?.series ?? []).map((series) => ({
+      ...series,
+      parsedPoints: series.points.flatMap((point) => {
+        const date = parseActivityDate(point.date, point.month)
         return date ? [{ date, value: point.value }] : []
       }),
-    )
+    }))
+    const visible = prepared.filter((series) => selected.has(series.key))
+    const datedPoints = visible.flatMap((series) => series.parsedPoints)
     const domain = extent(datedPoints, (point) => point.date)
     const fallback = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1))
     const first = domain[0] ?? fallback
@@ -85,7 +89,7 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
       xTicks,
       yTicks: y.ticks(Math.min(5, Math.max(1, Math.ceil(yMaximum)))),
     }
-  }, [activity, hidden])
+  }, [activity, selected])
 
   if (loading) {
     return <div className="h-[420px] animate-pulse rounded-2xl bg-white/[0.03]" aria-label="Loading activity chart" />
@@ -106,24 +110,28 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
     <div className="activity-chart">
       <div className="activity-legend flex flex-wrap gap-2" aria-label="Chart series">
         {activity.series.map((series) => {
-          const isHidden = hidden.has(series.key)
+          const isSelected = selected.has(series.key)
           return (
             <button
               key={series.key}
               type="button"
               onClick={() =>
                 setVisibility((current) => {
-                  const next = new Set(current.scope === visibilityScope ? current.hidden : [])
+                  const next = new Set(
+                    current.scope === visibilityScope
+                      ? current.selected
+                      : activity.series.map((candidate) => candidate.key),
+                  )
                   if (next.has(series.key)) next.delete(series.key)
                   else next.add(series.key)
-                  return { scope: visibilityScope, hidden: next }
+                  return { scope: visibilityScope, selected: next }
                 })
               }
-              aria-pressed={!isHidden}
+              aria-pressed={isSelected}
               className={`activity-series inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
-                isHidden
-                  ? 'border-white/5 bg-transparent text-slate-500'
-                  : 'border-white/10 bg-white/5 text-slate-200'
+                isSelected
+                  ? 'border-white/10 bg-white/5 text-slate-200'
+                  : 'border-white/5 bg-transparent text-slate-500'
               }`}
             >
               {series.avatar_url ? (
@@ -133,7 +141,7 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
               )}
               {series.label}
               <span className="text-slate-500">{compactNumber.format(series.total)}</span>
-              {isHidden ? <EyeOff aria-hidden="true" className="no-print size-3" /> : <Eye aria-hidden="true" className="no-print size-3" />}
+              {isSelected ? <Eye aria-hidden="true" className="no-print size-3" /> : <EyeOff aria-hidden="true" className="no-print size-3" />}
             </button>
           )
         })}
@@ -177,14 +185,11 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
             </text>
           ))}
           {chart.visible.map((series) => {
-            const points = series.points.flatMap((point) => {
-              const date = parseDate(point.date)
-              return date ? [{ date, value: point.value }] : []
-            })
             return (
               <path
                 key={series.key}
-                d={chart.lineBuilder(points) ?? undefined}
+                data-series-key={series.key}
+                d={chart.lineBuilder(series.parsedPoints) ?? undefined}
                 fill="none"
                 stroke={chart.colors(series.key)}
                 strokeWidth="2.5"
@@ -214,4 +219,10 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
 
 function formatActivityTick(date: Date, granularity?: ActivityGranularity) {
   return granularity === 'month' ? formatMonth(date) : formatDay(date)
+}
+
+function parseActivityDate(date?: string, month?: string) {
+  const value = date || month
+  if (!value) return null
+  return parseDate(/^\d{4}-\d{2}$/.test(value) ? `${value}-01` : value)
 }
