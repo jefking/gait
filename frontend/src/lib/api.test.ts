@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getActivity, startSync } from './api'
+import { getActivity, startSync, subscribeToDashboardEvents } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -30,5 +30,42 @@ describe('API client', () => {
       method: 'POST',
       body: JSON.stringify({ pat: 'ghp_secret' }),
     }))
+  })
+
+  it('subscribes to live dashboard invalidations and closes cleanly', () => {
+    class FakeEventSource {
+      static instance: FakeEventSource
+      listeners = new Map<string, EventListenerOrEventListenerObject>()
+      closed = false
+
+      constructor(readonly url: string) {
+        FakeEventSource.instance = this
+      }
+
+      addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+        this.listeners.set(type, listener)
+      }
+
+      close() {
+        this.closed = true
+      }
+
+      emit(type: string, data: string) {
+        const listener = this.listeners.get(type)
+        const event = new MessageEvent(type, { data })
+        if (typeof listener === 'function') listener(event)
+        else listener?.handleEvent(event)
+      }
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const received = vi.fn()
+
+    const unsubscribe = subscribeToDashboardEvents(received)
+    expect(FakeEventSource.instance.url).toBe('/api/events')
+    FakeEventSource.instance.emit('dashboard', '{"type":"snapshot","revision":12}')
+    expect(received).toHaveBeenCalledWith({ type: 'snapshot', revision: 12 })
+
+    unsubscribe()
+    expect(FakeEventSource.instance.closed).toBe(true)
   })
 })

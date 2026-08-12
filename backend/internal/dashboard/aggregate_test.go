@@ -76,6 +76,9 @@ func TestBuildActivityFillsBucketsAndCollapsesAfterEightSeries(t *testing.T) {
 	if activity.Granularity != ActivityByDay || len(activity.Series[0].Points) != 3 || activity.Series[0].Points[1].Date != "2024-01-02" || activity.Series[0].Points[1].Value != 0 {
 		t.Fatalf("expected zero-filled daily points: %+v", activity.Series[0].Points)
 	}
+	if activity.Series[0].Points[1].Month != "2024-01" {
+		t.Fatalf("expected legacy month compatibility field: %+v", activity.Series[0].Points[1])
+	}
 }
 
 func TestBuildActivityAdaptsGranularityToSelectedRange(t *testing.T) {

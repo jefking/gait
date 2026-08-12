@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -13,6 +14,7 @@ type DashboardService interface {
 	Dashboard() dashboard.DashboardResponse
 	Activity(dashboard.ActivityQuery) (dashboard.ActivityResponse, error)
 	Start(string) (dashboard.SyncStatus, error)
+	Subscribe(context.Context) <-chan dashboard.DashboardEvent
 }
 
 // NewRouter creates the application router. API routes are registered before
@@ -29,6 +31,7 @@ func NewRouter(staticDir string, services ...DashboardService) http.Handler {
 		service := services[0]
 		router.Get("/api/dashboard", dashboardHandler(service))
 		router.Get("/api/activity", activityHandler(service))
+		router.Get("/api/events", eventsHandler(service))
 		router.Post("/api/sync", syncHandler(service))
 	}
 

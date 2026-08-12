@@ -15,6 +15,7 @@ const activity: ActivityResponse = {
     {
       key: '1',
       label: 'example-org',
+      avatar_url: 'https://avatars.example.test/example-org.png',
       total: 3,
       points: [
         { date: '2024-01-01', value: 1 },
@@ -26,12 +27,18 @@ const activity: ActivityResponse = {
 
 describe('ActivityChart', () => {
   it('renders an accessible chart and lets a series be hidden', () => {
-    render(<ActivityChart activity={activity} loading={false} />)
+    const { container } = render(<ActivityChart activity={activity} loading={false} />)
     expect(screen.getByRole('img', { name: /Repository activity over time/ })).toBeInTheDocument()
     const series = screen.getByRole('button', { name: /example-org/ })
+    expect(container.querySelector('img')).toHaveAttribute('src', activity.series[0].avatar_url)
     expect(series).toHaveAttribute('aria-pressed', 'true')
+    expect(container.querySelectorAll('path[stroke-width="2.5"]')).toHaveLength(1)
     fireEvent.click(series)
     expect(series).toHaveAttribute('aria-pressed', 'false')
+    expect(container.querySelectorAll('path[stroke-width="2.5"]')).toHaveLength(0)
+    fireEvent.click(series)
+    expect(series).toHaveAttribute('aria-pressed', 'true')
+    expect(container.querySelectorAll('path[stroke-width="2.5"]')).toHaveLength(1)
   })
 
   it('renders an empty state when a filter has no activity', () => {

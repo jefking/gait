@@ -15,17 +15,35 @@ const (
 )
 
 type SyncStatus struct {
-	ID                 string     `json:"id,omitempty"`
-	State              SyncState  `json:"state"`
-	StartedAt          *time.Time `json:"started_at,omitempty"`
-	FinishedAt         *time.Time `json:"finished_at,omitempty"`
-	RateLimitResetAt   *time.Time `json:"rate_limit_reset_at,omitempty"`
-	TotalRepositories  int        `json:"total_repositories"`
-	CompletedRepos     int        `json:"completed_repositories"`
-	FailedRepositories int        `json:"failed_repositories"`
-	CurrentRepos       []string   `json:"current_repositories,omitempty"`
-	Message            string     `json:"message,omitempty"`
-	Warnings           []string   `json:"warnings,omitempty"`
+	ID                 string               `json:"id,omitempty"`
+	State              SyncState            `json:"state"`
+	StartedAt          *time.Time           `json:"started_at,omitempty"`
+	FinishedAt         *time.Time           `json:"finished_at,omitempty"`
+	RateLimitResetAt   *time.Time           `json:"rate_limit_reset_at,omitempty"`
+	TotalRepositories  int                  `json:"total_repositories"`
+	CompletedRepos     int                  `json:"completed_repositories"`
+	FailedRepositories int                  `json:"failed_repositories"`
+	CurrentRepos       []string             `json:"current_repositories,omitempty"`
+	CurrentWorkflows   []RepositoryWorkflow `json:"current_workflows,omitempty"`
+	Message            string               `json:"message,omitempty"`
+	Warnings           []string             `json:"warnings,omitempty"`
+}
+
+// RepositoryWorkflow describes the independently progressing steps for one
+// repository. It is deliberately small so it can be sent frequently while a
+// sync is running.
+type RepositoryWorkflow struct {
+	RepositoryID int64  `json:"repository_id"`
+	FullName     string `json:"full_name"`
+	Stage        string `json:"stage"`
+	Message      string `json:"message"`
+}
+
+// DashboardEvent is a lightweight invalidation signal. Clients receive it via
+// server-sent events, then read the canonical dashboard/activity APIs.
+type DashboardEvent struct {
+	Type     string `json:"type"`
+	Revision uint64 `json:"revision"`
 }
 
 func (status SyncStatus) Active() bool {
@@ -182,6 +200,7 @@ type ActivitySeries struct {
 
 type ActivityPoint struct {
 	Date  string `json:"date"`
+	Month string `json:"month,omitempty"`
 	Value int    `json:"value"`
 }
 

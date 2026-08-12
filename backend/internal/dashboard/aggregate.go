@@ -473,7 +473,11 @@ func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, _ ti
 		}
 		for bucket := firstBucket; !bucket.After(lastBucket); bucket = nextActivityBucket(bucket, result.Granularity) {
 			bucketKey := bucket.Format(time.DateOnly)
-			activitySeries.Points = append(activitySeries.Points, ActivityPoint{Date: bucketKey, Value: entry.buckets[bucketKey]})
+			activitySeries.Points = append(activitySeries.Points, ActivityPoint{
+				Date:  bucketKey,
+				Month: bucket.Format("2006-01"),
+				Value: entry.buckets[bucketKey],
+			})
 		}
 		result.Series = append(result.Series, activitySeries)
 	}

@@ -16,6 +16,9 @@ type fakeGitHubService struct {
 	mu           sync.Mutex
 	repositories []Repository
 	viewerGate   chan struct{}
+	pullGate     chan struct{}
+	pullStarted  chan struct{}
+	pullOnce     sync.Once
 }
 
 func (service *fakeGitHubService) Viewer(context.Context) (Viewer, error) {
@@ -31,7 +34,17 @@ func (service *fakeGitHubService) Repositories(context.Context) ([]Repository, e
 	return append([]Repository(nil), service.repositories...), nil
 }
 
-func (service *fakeGitHubService) PullRequests(_ context.Context, repository Repository, previous PullCache) (PullCache, error) {
+func (service *fakeGitHubService) PullRequests(ctx context.Context, repository Repository, previous PullCache) (PullCache, error) {
+	if service.pullStarted != nil {
+		service.pullOnce.Do(func() { close(service.pullStarted) })
+	}
+	if service.pullGate != nil {
+		select {
+		case <-service.pullGate:
+		case <-ctx.Done():
+			return PullCache{}, ctx.Err()
+		}
+	}
 	return PullCache{
 		Checkpoint: time.Now().UTC(),
 		PullRequests: []PullRequest{{
@@ -39,6 +52,62 @@ func (service *fakeGitHubService) PullRequests(_ context.Context, repository Rep
 			UpdatedAt: time.Now().UTC(), Author: Person{Login: "octocat"},
 		}},
 	}, nil
+}
+
+func TestManagerPublishesCommitDataBeforePullRequestStepCompletes(t *testing.T) {
+	pullGate := make(chan struct{})
+	pullStarted := make(chan struct{})
+	github := &fakeGitHubService{
+		repositories: []Repository{fakeRepository(1, "one")},
+		pullGate:     pullGate,
+		pullStarted:  pullStarted,
+	}
+	manager, err := NewManager(ManagerConfig{
+		DataDir:     t.TempDir(),
+		Concurrency: 1,
+		Runner:      &fakeRepositoryRunner{},
+		GitHubFactory: func(_ string, _ RateLimitCallbacks) (GitHubService, error) {
+			return github, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	defer manager.Close()
+
+	if _, err := manager.Start("memory-only-token"); err != nil {
+		t.Fatalf("start sync: %v", err)
+	}
+	select {
+	case <-pullStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pull request workflow did not start")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		response := manager.Dashboard()
+		if response.Snapshot != nil && len(response.Snapshot.Repositories) == 1 && response.Snapshot.Repositories[0].Commits == 1 {
+			if response.Sync.CompletedRepos != 0 {
+				t.Fatalf("repository completed before pull request step: %+v", response.Sync)
+			}
+			if response.Snapshot.Repositories[0].SyncStatus != "processing_pull_requests" {
+				t.Fatalf("unexpected incremental repository status: %+v", response.Snapshot.Repositories[0])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("commit data was not published incrementally: %+v", response)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	close(pullGate)
+	waitForSync(t, manager)
+	response := manager.Dashboard()
+	if response.Snapshot.Repositories[0].PullRequests == nil || response.Snapshot.Repositories[0].PullRequests.Opened != 1 {
+		t.Fatalf("pull request data was not added by the final workflow step: %+v", response.Snapshot.Repositories[0])
+	}
 }
 
 type fakeRepositoryRunner struct {

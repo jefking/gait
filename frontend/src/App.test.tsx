@@ -76,6 +76,7 @@ afterEach(() => {
 describe('App', () => {
   it('opens the PAT modal on load and can reveal cached data', async () => {
     const fetchMock = mockAPI()
+    const print = vi.spyOn(window, 'print').mockImplementation(() => undefined)
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
@@ -84,6 +85,8 @@ describe('App', () => {
     fireEvent.click(cachedButton)
     expect(await screen.findByText('Owners and repositories')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'hello-world' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Export PDF/ }))
+    expect(print).toHaveBeenCalledOnce()
   })
 
   it('submits a PAT, clears the input, and starts asynchronous progress', async () => {

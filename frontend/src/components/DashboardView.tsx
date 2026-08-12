@@ -8,6 +8,7 @@ import {
   GitFork,
   GitPullRequest,
   History,
+  FileDown,
   LockKeyhole,
   RefreshCw,
   Search,
@@ -28,6 +29,7 @@ import { isSyncActive } from '../lib/api'
 import { ActivityChart } from './ActivityChart'
 import { Avatar } from './Avatar'
 import { DateRangeSlider } from './DateRangeSlider'
+import { OwnerSelect } from './OwnerSelect'
 
 interface DashboardViewProps {
   snapshot: Snapshot
@@ -73,6 +75,8 @@ export function DashboardView({
   const repositoriesForOwner = ownerId
     ? snapshot.repositories.filter((repository) => repository.owner.id === ownerId)
     : snapshot.repositories
+  const selectedOwner = snapshot.owners.find((owner) => owner.owner.id === ownerId)
+  const selectedRepository = snapshot.repositories.find((repository) => repository.id === repositoryId)
 
   const filteredRepositories = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -90,8 +94,8 @@ export function DashboardView({
   ]
 
   return (
-    <div className="mx-auto w-full max-w-[1480px] px-4 pb-16 pt-5 sm:px-6 lg:px-8">
-      <header className="flex flex-col justify-between gap-5 border-b border-white/8 pb-6 sm:flex-row sm:items-center">
+    <div className="dashboard-shell mx-auto w-full max-w-[1480px] px-4 pb-16 pt-5 sm:px-6 lg:px-8">
+      <header className="report-header flex flex-col justify-between gap-5 border-b border-white/8 pb-6 sm:flex-row sm:items-center">
         <div className="flex items-center gap-4">
           <div className="grid size-11 place-items-center rounded-2xl bg-cyan-300 text-slate-950 shadow-lg shadow-cyan-400/10">
             <Activity aria-hidden="true" className="size-6" />
@@ -108,7 +112,7 @@ export function DashboardView({
             </p>
           </div>
         </div>
-        <div className="flex items-center justify-between gap-4 sm:justify-end">
+        <div className="flex items-center justify-between gap-3 sm:justify-end">
           <a
             href={snapshot.viewer.html_url}
             target="_blank"
@@ -121,23 +125,34 @@ export function DashboardView({
               <span className="block text-xs text-slate-500">@{snapshot.viewer.login}</span>
             </span>
           </a>
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={isSyncActive(sync)}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm font-medium text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/5 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <RefreshCw aria-hidden="true" className={`size-4 ${isSyncActive(sync) ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+          <div className="no-print flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm font-medium text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
+            >
+              <FileDown aria-hidden="true" className="size-4" />
+              <span className="hidden sm:inline">Export PDF</span>
+              <span className="sm:hidden">PDF</span>
+            </button>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={isSyncActive(sync)}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm font-medium text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/5 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <RefreshCw aria-hidden="true" className={`size-4 ${isSyncActive(sync) ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
         </div>
       </header>
 
       <SyncNotification sync={sync} />
 
-      <section aria-label="Repository totals" className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-label="Repository totals" className="report-summary mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {summaryCards.map(({ label, value, icon: Icon, detail }) => (
-          <article key={label} className="metric-card rounded-2xl border border-white/8 bg-slate-900/60 p-5">
+          <article key={label} className="report-metric metric-card rounded-2xl border border-white/8 bg-slate-900/60 p-5">
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-xs font-medium uppercase tracking-wider text-slate-500">{label}</p>
@@ -152,7 +167,7 @@ export function DashboardView({
         ))}
       </section>
 
-      <section className="mt-7 rounded-3xl border border-white/8 bg-slate-900/55 p-4 shadow-2xl shadow-black/10 sm:p-6">
+      <section className="report-activity mt-7 rounded-3xl border border-white/8 bg-slate-900/55 p-4 shadow-2xl shadow-black/10 sm:p-6">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-cyan-300">
@@ -160,9 +175,16 @@ export function DashboardView({
               All-time activity
             </div>
             <h2 className="mt-2 text-xl font-semibold text-white">Momentum over time</h2>
-            <p className="mt-1 text-sm text-slate-500">Monthly activity on each repository’s default branch.</p>
+            <p className="mt-1 text-sm text-slate-500">Activity on each repository’s default branch.</p>
+            <p className="print-only report-scope">
+              {metric === 'commits' ? 'Commits' : 'Pull requests opened'} by {groupBy}
+              {' · '}{selectedOwner?.owner.login ?? 'All owners'}
+              {' · '}{selectedRepository?.full_name ?? 'All repositories'}
+              {dateFrom && dateTo ? ` · ${dateFrom} to ${dateTo}` : ''}
+              {activity?.granularity ? ` · ${activity.granularity}` : ''}
+            </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="no-print grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             <SegmentedControl
               label="Metric"
               value={metric}
@@ -175,23 +197,16 @@ export function DashboardView({
               options={[['owner', 'Owner'], ['contributor', 'Contributor']]}
               onChange={(value) => onGroupByChange(value as ActivityGroup)}
             />
-            <label className="block text-xs font-medium text-slate-500">
-              Owner
-              <select
-                value={ownerId ?? ''}
-                onChange={(event) => {
-                  const next = event.target.value ? Number(event.target.value) : undefined
-                  onOwnerChange(next)
-                  if (repositoryId && !snapshot.repositories.some((repo) => repo.id === repositoryId && (!next || repo.owner.id === next))) {
-                    onRepositoryChange(undefined)
-                  }
-                }}
-                className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-400/50"
-              >
-                <option value="">All owners</option>
-                {snapshot.owners.map((owner) => <option key={owner.owner.id} value={owner.owner.id}>{owner.owner.login}</option>)}
-              </select>
-            </label>
+            <OwnerSelect
+              owners={snapshot.owners}
+              value={ownerId}
+              onChange={(next) => {
+                onOwnerChange(next)
+                if (repositoryId && !snapshot.repositories.some((repo) => repo.id === repositoryId && (!next || repo.owner.id === next))) {
+                  onRepositoryChange(undefined)
+                }
+              }}
+            />
             <label className="block text-xs font-medium text-slate-500">
               Repository
               <select
@@ -206,28 +221,30 @@ export function DashboardView({
           </div>
         </div>
         {activity?.available_from && activity.available_to && dateFrom && dateTo && (
-          <DateRangeSlider
-            availableFrom={activity.available_from}
-            availableTo={activity.available_to}
-            from={dateFrom}
-            to={dateTo}
-            granularity={activity.granularity}
-            onChange={onDateRangeChange}
-          />
+          <div className="no-print">
+            <DateRangeSlider
+              availableFrom={activity.available_from}
+              availableTo={activity.available_to}
+              from={dateFrom}
+              to={dateTo}
+              granularity={activity.granularity}
+              onChange={onDateRangeChange}
+            />
+          </div>
         )}
-        <div className="mt-7">
+        <div className="report-chart mt-7">
           <ActivityChart activity={activity} loading={activityLoading} />
         </div>
       </section>
 
-      <div className="mt-7 grid items-start gap-7 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="min-w-0 rounded-3xl border border-white/8 bg-slate-900/55 p-4 sm:p-6">
+      <div className="report-detail-grid mt-7 grid items-start gap-7 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <section className="report-portfolio min-w-0 rounded-3xl border border-white/8 bg-slate-900/55 p-4 sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Repository portfolio</p>
               <h2 className="mt-2 text-xl font-semibold text-white">Owners and repositories</h2>
             </div>
-            <label className="relative block sm:w-72">
+            <label className="no-print relative block sm:w-72">
               <span className="sr-only">Search repositories</span>
               <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
               <input
@@ -240,7 +257,7 @@ export function DashboardView({
             </label>
           </div>
 
-          <div className="mt-6 space-y-3">
+          <div className="report-owner-list mt-6 space-y-3">
             {snapshot.owners.map((owner) => (
               <OwnerGroup
                 key={owner.owner.id}
@@ -256,7 +273,7 @@ export function DashboardView({
           </div>
         </section>
 
-        <section className="rounded-3xl border border-white/8 bg-slate-900/55 p-5 sm:p-6">
+        <section className="report-contributors rounded-3xl border border-white/8 bg-slate-900/55 p-5 sm:p-6">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-cyan-300">
             <Users aria-hidden="true" className="size-4" />
             Contributors
@@ -264,7 +281,7 @@ export function DashboardView({
           <h2 className="mt-2 text-xl font-semibold text-white">Most active people</h2>
           <div className="mt-5 divide-y divide-white/6">
             {snapshot.contributors.slice(0, 20).map((contributor, index) => (
-              <article key={contributor.key} className="flex items-center gap-3 py-3 first:pt-0">
+              <article key={contributor.key} className="report-contributor-row flex items-center gap-3 py-3 first:pt-0">
                 <span className="w-5 text-right text-xs tabular-nums text-slate-600">{index + 1}</span>
                 <Avatar src={contributor.avatar_url} name={contributor.name} size="sm" />
                 <div className="min-w-0 flex-1">
@@ -301,12 +318,13 @@ export function SyncNotification({ sync }: { sync: SyncStatus }) {
   const tone = sync.state === 'failed'
     ? 'border-rose-400/25 bg-slate-900/95 text-rose-100 shadow-rose-950/30'
     : 'border-cyan-300/25 bg-slate-900/95 text-cyan-100 shadow-cyan-950/30'
+  const workflow = sync.current_workflows?.[0]
 
   return (
     <aside
       aria-live="polite"
       aria-atomic="true"
-      className={`fixed right-4 top-4 z-40 w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl sm:right-6 sm:top-6 ${tone}`}
+      className={`no-print fixed right-4 top-4 z-40 w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl sm:right-6 sm:top-6 ${tone}`}
     >
       <div className="flex items-start gap-3 px-4 py-3.5">
         <RefreshCw aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${active ? 'animate-spin' : ''}`} />
@@ -319,7 +337,9 @@ export function SyncNotification({ sync }: { sync: SyncStatus }) {
               </span>
             )}
           </div>
-          {sync.current_repositories && sync.current_repositories.length > 0 && (
+          {workflow ? (
+            <p className="mt-1 truncate text-xs opacity-65">{workflow.message}</p>
+          ) : sync.current_repositories && sync.current_repositories.length > 0 && (
             <p className="mt-1 truncate text-xs opacity-65">Updating {sync.current_repositories.join(', ')}</p>
           )}
         </div>
@@ -374,8 +394,8 @@ function SegmentedControl({
 function OwnerGroup({ owner, repositories }: { owner: OwnerSummary; repositories: RepositorySummary[] }) {
   if (repositories.length === 0) return null
   return (
-    <details className="group overflow-hidden rounded-2xl border border-white/8 bg-slate-950/35" open={repositories.length <= 6}>
-      <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-4 transition hover:bg-white/[0.025] [&::-webkit-details-marker]:hidden">
+    <details className="report-owner-group group overflow-hidden rounded-2xl border border-white/8 bg-slate-950/35" open={repositories.length <= 6}>
+      <summary className="report-owner-summary flex cursor-pointer list-none items-center gap-3 px-4 py-4 transition hover:bg-white/[0.025] [&::-webkit-details-marker]:hidden">
         <Avatar src={owner.owner.avatar_url} name={owner.owner.login} size="md" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -386,7 +406,7 @@ function OwnerGroup({ owner, repositories }: { owner: OwnerSummary; repositories
             {owner.repositories} repos · {compact.format(owner.commits)} commits · {compact.format(owner.pull_requests_opened)} PRs
           </p>
         </div>
-        <span className="text-xs text-slate-600 transition group-open:rotate-180">⌄</span>
+        <span className="no-print text-xs text-slate-600 transition group-open:rotate-180">⌄</span>
       </summary>
       <div className="border-t border-white/6">
         {repositories.map((repository) => <RepositoryRow key={repository.id} repository={repository} />)}
@@ -397,7 +417,7 @@ function OwnerGroup({ owner, repositories }: { owner: OwnerSummary; repositories
 
 function RepositoryRow({ repository }: { repository: RepositorySummary }) {
   return (
-    <article className="grid gap-4 border-b border-white/5 px-4 py-4 last:border-b-0 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+    <article className="report-repository-row grid gap-4 border-b border-white/5 px-4 py-4 last:border-b-0 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <a href={repository.html_url} target="_blank" rel="noreferrer" className="truncate text-sm font-semibold text-slate-200 transition hover:text-cyan-300">

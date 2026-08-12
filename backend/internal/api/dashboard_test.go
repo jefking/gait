@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ type fakeDashboardService struct {
 	started  string
 	startErr error
 	query    dashboard.ActivityQuery
+	events   chan dashboard.DashboardEvent
 }
 
 func (service *fakeDashboardService) Dashboard() dashboard.DashboardResponse {
@@ -30,6 +32,13 @@ func (service *fakeDashboardService) Activity(query dashboard.ActivityQuery) (da
 func (service *fakeDashboardService) Start(token string) (dashboard.SyncStatus, error) {
 	service.started = token
 	return dashboard.SyncStatus{ID: "sync-1", State: dashboard.SyncDiscovering}, service.startErr
+}
+
+func (service *fakeDashboardService) Subscribe(context.Context) <-chan dashboard.DashboardEvent {
+	if service.events == nil {
+		service.events = make(chan dashboard.DashboardEvent)
+	}
+	return service.events
 }
 
 func TestStartSyncAPIAcceptsPATWithoutEchoingIt(t *testing.T) {
@@ -111,5 +120,24 @@ func TestStartSyncAPIRejectsUnknownFields(t *testing.T) {
 	}
 	if service.started != "" {
 		t.Fatalf("service should not have been called")
+	}
+}
+
+func TestDashboardEventsStreamsInvalidations(t *testing.T) {
+	events := make(chan dashboard.DashboardEvent, 1)
+	events <- dashboard.DashboardEvent{Type: "snapshot", Revision: 7}
+	close(events)
+	service := &fakeDashboardService{events: events}
+	request := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	response := httptest.NewRecorder()
+
+	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
+
+	if response.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("expected event stream, got %q", response.Header().Get("Content-Type"))
+	}
+	want := "event: dashboard\ndata: {\"type\":\"snapshot\",\"revision\":7}\n\n"
+	if response.Body.String() != want {
+		t.Fatalf("unexpected event body: %q", response.Body.String())
 	}
 }

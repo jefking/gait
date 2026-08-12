@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -61,6 +62,48 @@ func activityHandler(service DashboardService) http.HandlerFunc {
 		}
 		response.Header().Set("Cache-Control", "no-store")
 		writeJSONValue(response, http.StatusOK, activity)
+	}
+}
+
+func eventsHandler(service DashboardService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		flusher, ok := response.(http.Flusher)
+		if !ok {
+			http.Error(response, "streaming is unavailable", http.StatusInternalServerError)
+			return
+		}
+		response.Header().Set("Content-Type", "text/event-stream")
+		response.Header().Set("Cache-Control", "no-cache, no-store")
+		response.Header().Set("Connection", "keep-alive")
+		response.Header().Set("X-Accel-Buffering", "no")
+		_ = http.NewResponseController(response).SetWriteDeadline(time.Time{})
+
+		events := service.Subscribe(request.Context())
+		keepAlive := time.NewTicker(15 * time.Second)
+		defer keepAlive.Stop()
+		for {
+			select {
+			case event, open := <-events:
+				if !open {
+					return
+				}
+				payload, err := json.Marshal(event)
+				if err != nil {
+					return
+				}
+				if _, err := fmt.Fprintf(response, "event: dashboard\ndata: %s\n\n", payload); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-keepAlive.C:
+				if _, err := fmt.Fprint(response, ": keep-alive\n\n"); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-request.Context().Done():
+				return
+			}
+		}
 	}
 }
 

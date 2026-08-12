@@ -17,8 +17,21 @@ export interface SyncStatus {
   completed_repositories: number
   failed_repositories: number
   current_repositories?: string[]
+  current_workflows?: RepositoryWorkflow[]
   message?: string
   warnings?: string[]
+}
+
+export interface RepositoryWorkflow {
+  repository_id: number
+  full_name: string
+  stage: 'updating_git' | 'analyzing' | 'pull_requests' | 'publishing'
+  message: string
+}
+
+export interface DashboardEvent {
+  type: 'sync' | 'snapshot' | 'dashboard'
+  revision: number
 }
 
 export interface Viewer {
@@ -231,4 +244,23 @@ export function isSyncActive(status: SyncStatus): boolean {
     status.state === 'syncing' ||
     status.state === 'waiting_rate_limit'
   )
+}
+
+export function subscribeToDashboardEvents(
+  onEvent: (event: DashboardEvent) => void,
+  onError?: () => void,
+): () => void {
+  if (typeof EventSource === 'undefined') return () => undefined
+  const source = new EventSource('/api/events')
+  const handleEvent = (event: Event) => {
+    try {
+      onEvent(JSON.parse((event as MessageEvent<string>).data) as DashboardEvent)
+    } catch {
+      // A malformed invalidation can safely be ignored; EventSource reconnects
+      // and the polling fallback still reads canonical state.
+    }
+  }
+  source.addEventListener('dashboard', handleEvent)
+  if (onError) source.addEventListener('error', onError)
+  return () => source.close()
 }

@@ -1,5 +1,5 @@
 import { Activity, Database, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { DashboardView } from './components/DashboardView'
 import { TokenModal } from './components/TokenModal'
 import {
@@ -7,6 +7,7 @@ import {
   getDashboard,
   isSyncActive,
   startSync,
+  subscribeToDashboardEvents,
   type ActivityGroup,
   type ActivityMetric,
   type ActivityResponse,
@@ -25,33 +26,66 @@ function App() {
   const [metric, setMetric] = useState<ActivityMetric>('commits')
   const [ownerId, setOwnerId] = useState<number>()
   const [repositoryId, setRepositoryId] = useState<number>()
-  const [dateRange, setDateRange] = useState<{ from: string; to: string }>()
+  const [dateRange, setDateRange] = useState<{ from: string; to: string; userSelected: boolean }>()
   const [activityResult, setActivityResult] = useState<{
     key: string
     data: ActivityResponse
   }>()
 
+  const applyDashboard = useCallback((response: DashboardResponse) => {
+    setDashboard(response)
+    setDashboardError(undefined)
+    if (response.sync.state === 'failed') {
+      setModalError(response.sync.message || 'The sync failed.')
+      setModalOpen(true)
+    }
+  }, [])
+
   useEffect(() => {
     const controller = new AbortController()
     getDashboard(controller.signal)
-      .then((response) => {
-        setDashboard(response)
-        if (response.sync.state === 'failed') {
-          setModalError(response.sync.message || 'The previous sync failed.')
-        }
-      })
+      .then(applyDashboard)
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
         setDashboardError(error instanceof Error ? error.message : 'Could not load the dashboard.')
       })
       .finally(() => setLoadingDashboard(false))
     return () => controller.abort()
-  }, [])
+  }, [applyDashboard])
 
   const syncActive = dashboard ? isSyncActive(dashboard.sync) : false
-  const activityRequestKey = dashboard?.snapshot && !syncActive
-    ? [dashboard.snapshot.generated_at, groupBy, metric, ownerId ?? '', repositoryId ?? '', dateRange?.from ?? '', dateRange?.to ?? ''].join(':')
+  const selectedFrom = dateRange?.userSelected ? dateRange.from : undefined
+  const selectedTo = dateRange?.userSelected ? dateRange.to : undefined
+  const activityRequestKey = dashboard?.snapshot
+    ? [dashboard.snapshot.generated_at, groupBy, metric, ownerId ?? '', repositoryId ?? '', selectedFrom ?? '', selectedTo ?? ''].join(':')
     : ''
+
+  useEffect(() => {
+    let cancelled = false
+    let refreshTimer: number | undefined
+    let controller: AbortController | undefined
+    const unsubscribe = subscribeToDashboardEvents(() => {
+      window.clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(() => {
+        controller?.abort()
+        controller = new AbortController()
+        void getDashboard(controller.signal)
+          .then((response) => {
+            if (!cancelled) applyDashboard(response)
+          })
+          .catch((error: unknown) => {
+            if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return
+            setDashboardError(error instanceof Error ? error.message : 'Could not refresh live dashboard data.')
+          })
+      }, 75)
+    })
+    return () => {
+      cancelled = true
+      window.clearTimeout(refreshTimer)
+      controller?.abort()
+      unsubscribe()
+    }
+  }, [applyDashboard])
 
   useEffect(() => {
     if (!syncActive) return
@@ -60,38 +94,41 @@ function App() {
       void getDashboard()
         .then((response) => {
           if (cancelled) return
-          setDashboard(response)
-          setDashboardError(undefined)
-          if (response.sync.state === 'failed') {
-            setModalError(response.sync.message || 'The sync failed.')
-            setModalOpen(true)
-          }
+          applyDashboard(response)
         })
         .catch((error: unknown) => {
           if (!cancelled) setDashboardError(error instanceof Error ? error.message : 'Could not refresh sync progress.')
         })
     }
-    const interval = window.setInterval(poll, 2000)
+    const interval = window.setInterval(poll, 10000)
     return () => {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [syncActive, dashboard?.sync.id])
+  }, [applyDashboard, syncActive, dashboard?.sync.id])
 
   useEffect(() => {
     if (!activityRequestKey) return
     const controller = new AbortController()
     getActivity(
-      { groupBy, metric, ownerId, repositoryId, from: dateRange?.from, to: dateRange?.to },
+      { groupBy, metric, ownerId, repositoryId, from: selectedFrom, to: selectedTo },
       controller.signal,
     )
       .then((data) => {
         setActivityResult({ key: activityRequestKey, data })
-        if (data.from && data.to) {
+        if (data.available_from && data.available_to) {
           setDateRange((current) =>
-            current?.from === data.from && current?.to === data.to
-              ? current
-              : { from: data.from!, to: data.to! },
+            current?.userSelected
+              ? {
+                  from: data.from ?? current.from,
+                  to: data.to ?? current.to,
+                  userSelected: true,
+                }
+              : {
+                  from: data.available_from!,
+                  to: data.available_to!,
+                  userSelected: false,
+                },
           )
         }
       })
@@ -100,7 +137,7 @@ function App() {
         setDashboardError(error instanceof Error ? error.message : 'Could not load activity history.')
       })
     return () => controller.abort()
-  }, [activityRequestKey, groupBy, metric, ownerId, repositoryId, dateRange?.from, dateRange?.to])
+  }, [activityRequestKey, groupBy, metric, ownerId, repositoryId, selectedFrom, selectedTo])
 
   const connect = async (pat: string) => {
     setSubmitting(true)
@@ -125,7 +162,7 @@ function App() {
           snapshot={dashboard.snapshot}
           sync={dashboard.sync}
           activity={activityResult?.data ?? null}
-          activityLoading={activityResult?.key !== activityRequestKey}
+          activityLoading={!activityResult}
           groupBy={groupBy}
           metric={metric}
           ownerId={ownerId}
@@ -136,7 +173,7 @@ function App() {
           onMetricChange={setMetric}
           onOwnerChange={setOwnerId}
           onRepositoryChange={setRepositoryId}
-          onDateRangeChange={(from, to) => setDateRange({ from, to })}
+          onDateRangeChange={(from, to) => setDateRange({ from, to, userSelected: true })}
           onRefresh={() => {
             setModalError(undefined)
             setModalOpen(true)

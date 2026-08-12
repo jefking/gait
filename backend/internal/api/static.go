@@ -23,6 +23,9 @@ func newSPAHandler(staticDir string) http.Handler {
 		requestedFile := filepath.Join(staticDir, filepath.FromSlash(relativePath))
 
 		if fileInfo, err := os.Stat(requestedFile); err == nil && !fileInfo.IsDir() {
+			if relativePath == "index.html" {
+				response.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			}
 			fileServer.ServeHTTP(response, request)
 			return
 		}
@@ -42,6 +45,7 @@ func newSPAHandler(staticDir string) http.Handler {
 
 		indexRequest := request.Clone(request.Context())
 		indexRequest.URL.Path = "/"
+		response.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		fileServer.ServeHTTP(response, indexRequest)
 	})
 }

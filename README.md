@@ -7,7 +7,7 @@ each repository up to date, analyzes default-branch history with
 combines the result with GitHub pull request history.
 
 The React dashboard groups repositories by owner or organization and shows
-all-time monthly activity, repository totals, and contributor rankings. The Go
+adaptive daily, weekly, or monthly activity, repository totals, and contributor rankings. The Go
 server performs all GitHub, Git, analysis, caching, and background-job work.
 
 ## Stack
@@ -29,8 +29,15 @@ The server:
 2. Clones new repositories and fetches existing app-owned clones using four
    concurrent workers by default.
 3. Checks out the latest default branch and runs `git-changes-by-day`.
-4. Fetches all pull requests on first use and only updated pull requests later.
-5. Atomically publishes cached per-repository reports and dashboard snapshots.
+4. Publishes that repository's commit statistics immediately, then fetches all
+   pull requests on first use and only updated pull requests later.
+5. Publishes the enriched repository again and atomically persists each
+   incremental dashboard snapshot.
+
+Repository workers expose their current `updating_git`, `analyzing`,
+`pull_requests`, and `publishing` workflow step. The frontend receives
+server-sent invalidation events and refreshes the canonical dashboard/activity
+APIs as each step completes; slower polling remains as a reconnect fallback.
 
 The PAT is held only in frontend and backend memory for the duration of the
 request/job. It is not placed in clone URLs, Git remotes, files, snapshots,
@@ -101,12 +108,16 @@ volume contains only app-owned repository clones and reports—not the PAT.
 | --- | --- | --- |
 | `GET` | `/api/health` | Liveness check |
 | `GET` | `/api/dashboard` | Latest snapshot and current sync status |
-| `GET` | `/api/activity` | Monthly owner or contributor activity |
+| `GET` | `/api/activity` | Adaptive owner or contributor activity |
+| `GET` | `/api/events` | Live server-sent dashboard invalidations |
 | `POST` | `/api/sync` | Start a background sync with `{ "pat": "…" }` |
 
 `/api/activity` accepts `group_by=owner|contributor`,
-`metric=commits|pull_requests`, and optional numeric `owner_id` and
-`repository_id` filters.
+`metric=commits|pull_requests`, optional numeric `owner_id` and
+`repository_id` filters, and optional UTC `from`/`to` dates in `YYYY-MM-DD`
+format. Responses include the oldest/latest available dates and automatically
+use daily buckets for ranges up to 62 days, weekly buckets up to two years,
+and monthly buckets for longer histories.
 
 ## Configuration
 

@@ -41,6 +41,10 @@ type Manager struct {
 	status   SyncStatus
 	snapshot *Snapshot
 	reports  map[int64]RepositoryReport
+
+	eventMu     sync.Mutex
+	subscribers map[chan DashboardEvent]struct{}
+	revision    uint64
 }
 
 func NewManager(config ManagerConfig) (*Manager, error) {
@@ -85,6 +89,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		status:      SyncStatus{State: SyncIdle, Warnings: warnings},
 		snapshot:    snapshot,
 		reports:     reports,
+		subscribers: make(map[chan DashboardEvent]struct{}),
 	}
 	return manager, nil
 }
@@ -98,6 +103,44 @@ func (manager *Manager) Dashboard() DashboardResponse {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return DashboardResponse{Snapshot: manager.snapshot, Sync: cloneSyncStatus(manager.status)}
+}
+
+// Subscribe streams coalesced dashboard invalidation events until either the
+// request or the manager is closed. Dashboard data itself remains available
+// through the regular APIs, which also makes reconnects lossless.
+func (manager *Manager) Subscribe(ctx context.Context) <-chan DashboardEvent {
+	events := make(chan DashboardEvent, 1)
+	manager.eventMu.Lock()
+	manager.subscribers[events] = struct{}{}
+	events <- DashboardEvent{Type: "dashboard", Revision: manager.revision}
+	manager.eventMu.Unlock()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-manager.ctx.Done():
+		}
+		manager.eventMu.Lock()
+		if _, exists := manager.subscribers[events]; exists {
+			delete(manager.subscribers, events)
+			close(events)
+		}
+		manager.eventMu.Unlock()
+	}()
+	return events
+}
+
+func (manager *Manager) notify(eventType string) {
+	manager.eventMu.Lock()
+	defer manager.eventMu.Unlock()
+	manager.revision++
+	event := DashboardEvent{Type: eventType, Revision: manager.revision}
+	for subscriber := range manager.subscribers {
+		select {
+		case subscriber <- event:
+		default:
+		}
+	}
 }
 
 func (manager *Manager) Activity(query ActivityQuery) (ActivityResponse, error) {
@@ -139,6 +182,7 @@ func (manager *Manager) Start(token string) (SyncStatus, error) {
 	}
 	manager.status = status
 	manager.mu.Unlock()
+	manager.notify("sync")
 
 	manager.wg.Add(1)
 	go func(syncID, pat string) {
@@ -217,6 +261,7 @@ func (manager *Manager) runSync(ctx context.Context, syncID, token string) {
 		repository Repository
 		report     RepositoryReport
 		warnings   []string
+		final      bool
 	}
 	jobs := make(chan Repository)
 	results := make(chan repositoryResult)
@@ -227,12 +272,19 @@ func (manager *Manager) runSync(ctx context.Context, syncID, token string) {
 		go func() {
 			defer workers.Done()
 			for repository := range jobs {
-				manager.markCurrent(syncID, repository.FullName, true)
+				manager.markWorkflow(syncID, repository, "updating_git", "Cloning or fetching "+repository.FullName)
 				previous := previousReports[repository.ID]
-				report, warnings := manager.processRepository(ctx, token, github, repository, previous)
-				manager.markCurrent(syncID, repository.FullName, false)
+				report, warnings := manager.processGitRepository(ctx, syncID, token, repository, previous)
+				manager.markWorkflow(syncID, repository, "pull_requests", "Loading pull requests for "+repository.FullName)
 				select {
 				case results <- repositoryResult{repository: repository, report: report, warnings: warnings}:
+				case <-ctx.Done():
+					return
+				}
+				report, warnings = manager.processPullRequests(ctx, token, github, repository, report, warnings)
+				manager.markWorkflow(syncID, repository, "publishing", "Publishing statistics for "+repository.FullName)
+				select {
+				case results <- repositoryResult{repository: repository, report: report, warnings: warnings, final: true}:
 				case <-ctx.Done():
 					return
 				}
@@ -257,19 +309,24 @@ func (manager *Manager) runSync(ctx context.Context, syncID, token string) {
 	for result := range results {
 		reports[result.repository.ID] = result.report
 		repoStates[result.repository.ID] = result.report.SyncStatus
-		manager.updateStatus(syncID, func(status *SyncStatus) {
-			status.CompletedRepos++
-			if len(result.warnings) > 0 {
-				status.FailedRepositories++
-			}
-			for _, warning := range result.warnings {
-				appendStatusWarning(status, warning)
-			}
-		})
+		if result.final {
+			manager.updateStatus(syncID, func(status *SyncStatus) {
+				status.CompletedRepos++
+				if len(result.warnings) > 0 {
+					status.FailedRepositories++
+				}
+				for _, warning := range result.warnings {
+					appendStatusWarning(status, warning)
+				}
+			})
+		}
 		snapshot := BuildSnapshot(viewer, repositories, reports, repoStates)
 		manager.publish(snapshot, reports)
 		if err := manager.store.SaveSnapshot(snapshot); err != nil {
 			manager.appendWarning(syncID, "Dashboard snapshot could not be persisted")
+		}
+		if result.final {
+			manager.removeWorkflow(syncID, result.repository.ID)
 		}
 	}
 	if ctx.Err() != nil {
@@ -279,10 +336,10 @@ func (manager *Manager) runSync(ctx context.Context, syncID, token string) {
 	manager.completeSync(syncID)
 }
 
-func (manager *Manager) processRepository(ctx context.Context, token string, github GitHubService, repository Repository, previous RepositoryReport) (RepositoryReport, []string) {
+func (manager *Manager) processGitRepository(ctx context.Context, syncID, token string, repository Repository, previous RepositoryReport) (RepositoryReport, []string) {
 	report := previous
 	report.Repository = repository
-	report.SyncStatus = "synced"
+	report.SyncStatus = "processing_pull_requests"
 	report.SyncMessage = ""
 	warnings := make([]string, 0)
 
@@ -290,6 +347,7 @@ func (manager *Manager) processRepository(ctx context.Context, token string, git
 	if err := manager.runner.Sync(ctx, token, repository, repositoryPath); err != nil {
 		warnings = append(warnings, repository.FullName+": Git update failed — "+sanitizeError(err, token))
 	} else {
+		manager.markWorkflow(syncID, repository, "analyzing", "Analyzing Git history for "+repository.FullName)
 		temporary, err := manager.store.NewCommitTemp(repository.ID)
 		if err != nil {
 			warnings = append(warnings, repository.FullName+": commit report could not be created")
@@ -307,7 +365,15 @@ func (manager *Manager) processRepository(ctx context.Context, token string, git
 			}
 		}
 	}
+	if len(warnings) > 0 {
+		report.SyncMessage = strings.TrimPrefix(warnings[0], repository.FullName+": ")
+	} else {
+		report.SyncMessage = "Commit history updated; pull requests are updating"
+	}
+	return report, warnings
+}
 
+func (manager *Manager) processPullRequests(ctx context.Context, token string, github GitHubService, repository Repository, report RepositoryReport, warnings []string) (RepositoryReport, []string) {
 	previousPulls, loadErr := manager.store.LoadPullCache(repository.ID)
 	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
 		warnings = append(warnings, repository.FullName+": prior pull request cache could not be read")
@@ -339,6 +405,9 @@ func (manager *Manager) processRepository(ctx context.Context, token string, git
 	if len(warnings) > 0 {
 		report.SyncStatus = "warning"
 		report.SyncMessage = strings.TrimPrefix(warnings[0], repository.FullName+": ")
+	} else {
+		report.SyncStatus = "synced"
+		report.SyncMessage = ""
 	}
 	return report, warnings
 }
@@ -352,6 +421,7 @@ func (manager *Manager) publish(snapshot *Snapshot, reports map[int64]Repository
 	manager.snapshot = snapshot
 	manager.reports = copyReports
 	manager.mu.Unlock()
+	manager.notify("snapshot")
 }
 
 func (manager *Manager) completeSync(syncID string) {
@@ -359,6 +429,7 @@ func (manager *Manager) completeSync(syncID string) {
 		now := time.Now().UTC()
 		status.FinishedAt = &now
 		status.CurrentRepos = nil
+		status.CurrentWorkflows = nil
 		status.RateLimitResetAt = nil
 		if len(status.Warnings) > 0 {
 			status.State = SyncCompleteWithWarnings
@@ -376,6 +447,7 @@ func (manager *Manager) failSync(syncID string, err error, token string) {
 		status.State = SyncFailed
 		status.FinishedAt = &now
 		status.CurrentRepos = nil
+		status.CurrentWorkflows = nil
 		status.RateLimitResetAt = nil
 		status.Message = fatalSyncMessage(err, token)
 	})
@@ -426,22 +498,43 @@ func (manager *Manager) resumeSync(syncID string) {
 	})
 }
 
-func (manager *Manager) markCurrent(syncID, repository string, add bool) {
+func (manager *Manager) markWorkflow(syncID string, repository Repository, stage, message string) {
 	manager.updateStatus(syncID, func(status *SyncStatus) {
-		current := make(map[string]struct{}, len(status.CurrentRepos))
-		for _, name := range status.CurrentRepos {
-			current[name] = struct{}{}
+		workflow := RepositoryWorkflow{RepositoryID: repository.ID, FullName: repository.FullName, Stage: stage, Message: message}
+		found := false
+		for index := range status.CurrentWorkflows {
+			if status.CurrentWorkflows[index].RepositoryID == repository.ID {
+				status.CurrentWorkflows[index] = workflow
+				found = true
+				break
+			}
 		}
-		if add {
-			current[repository] = struct{}{}
-		} else {
-			delete(current, repository)
+		if !found {
+			status.CurrentWorkflows = append(status.CurrentWorkflows, workflow)
 		}
+		sort.Slice(status.CurrentWorkflows, func(left, right int) bool {
+			return strings.ToLower(status.CurrentWorkflows[left].FullName) < strings.ToLower(status.CurrentWorkflows[right].FullName)
+		})
 		status.CurrentRepos = status.CurrentRepos[:0]
-		for name := range current {
-			status.CurrentRepos = append(status.CurrentRepos, name)
+		for _, current := range status.CurrentWorkflows {
+			status.CurrentRepos = append(status.CurrentRepos, current.FullName)
 		}
-		sort.Strings(status.CurrentRepos)
+	})
+}
+
+func (manager *Manager) removeWorkflow(syncID string, repositoryID int64) {
+	manager.updateStatus(syncID, func(status *SyncStatus) {
+		workflows := status.CurrentWorkflows[:0]
+		for _, workflow := range status.CurrentWorkflows {
+			if workflow.RepositoryID != repositoryID {
+				workflows = append(workflows, workflow)
+			}
+		}
+		status.CurrentWorkflows = workflows
+		status.CurrentRepos = status.CurrentRepos[:0]
+		for _, workflow := range workflows {
+			status.CurrentRepos = append(status.CurrentRepos, workflow.FullName)
+		}
 	})
 }
 
@@ -462,15 +555,18 @@ func appendStatusWarning(status *SyncStatus, warning string) {
 
 func (manager *Manager) updateStatus(syncID string, update func(*SyncStatus)) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	if manager.status.ID != syncID {
+		manager.mu.Unlock()
 		return
 	}
 	update(&manager.status)
+	manager.mu.Unlock()
+	manager.notify("sync")
 }
 
 func cloneSyncStatus(status SyncStatus) SyncStatus {
 	status.CurrentRepos = append([]string(nil), status.CurrentRepos...)
+	status.CurrentWorkflows = append([]RepositoryWorkflow(nil), status.CurrentWorkflows...)
 	status.Warnings = append([]string(nil), status.Warnings...)
 	return status
 }

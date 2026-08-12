@@ -65,14 +65,15 @@ func TestStaticAndSPARoutes(t *testing.T) {
 
 	handler := NewRouter(staticDir)
 	tests := []struct {
-		name   string
-		path   string
-		status int
-		body   string
+		name    string
+		path    string
+		status  int
+		body    string
+		noCache bool
 	}{
-		{name: "root", path: "/", status: http.StatusOK, body: "<h1>Gait</h1>"},
+		{name: "root", path: "/", status: http.StatusOK, body: "<h1>Gait</h1>", noCache: true},
 		{name: "static file", path: "/images/example.txt", status: http.StatusOK, body: "static image"},
-		{name: "client route", path: "/future/route", status: http.StatusOK, body: "<h1>Gait</h1>"},
+		{name: "client route", path: "/future/route", status: http.StatusOK, body: "<h1>Gait</h1>", noCache: true},
 		{name: "missing asset", path: "/images/missing.png", status: http.StatusNotFound, body: "404 page not found"},
 	}
 
@@ -88,6 +89,9 @@ func TestStaticAndSPARoutes(t *testing.T) {
 			}
 			if !strings.Contains(response.Body.String(), test.body) {
 				t.Fatalf("expected body to contain %q, got %q", test.body, response.Body.String())
+			}
+			if test.noCache && response.Header().Get("Cache-Control") != "no-cache, no-store, must-revalidate" {
+				t.Fatalf("expected HTML shell to disable caching, got %q", response.Header().Get("Cache-Control"))
 			}
 		})
 	}

@@ -12,6 +12,7 @@ import {
 import { Eye, EyeOff, LineChart as LineChartIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ActivityGranularity, ActivityResponse } from '../lib/api'
+import { Avatar } from './Avatar'
 
 interface ActivityChartProps {
   activity: ActivityResponse | null
@@ -24,7 +25,7 @@ const formatMonth = utcFormat('%b %Y')
 const compactNumber = new Intl.NumberFormat(undefined, { notation: 'compact' })
 
 export function ActivityChart({ activity, loading }: ActivityChartProps) {
-  const visibilityScope = `${activity?.group_by ?? ''}:${activity?.metric ?? ''}`
+  const visibilityScope = `${activity?.group_by ?? ''}:${activity?.metric ?? ''}:${activity?.series.map((series) => series.key).join(',') ?? ''}`
   const [visibility, setVisibility] = useState<{ scope: string; hidden: Set<string> }>({
     scope: visibilityScope,
     hidden: new Set(),
@@ -102,8 +103,8 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
   }
 
   return (
-    <div>
-      <div className="flex flex-wrap gap-2" aria-label="Chart series">
+    <div className="activity-chart">
+      <div className="activity-legend flex flex-wrap gap-2" aria-label="Chart series">
         {activity.series.map((series) => {
           const isHidden = hidden.has(series.key)
           return (
@@ -119,16 +120,20 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
                 })
               }
               aria-pressed={!isHidden}
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
+              className={`activity-series inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
                 isHidden
                   ? 'border-white/5 bg-transparent text-slate-500'
                   : 'border-white/10 bg-white/5 text-slate-200'
               }`}
             >
-              <span className="size-2 rounded-full" style={{ backgroundColor: chart.colors(series.key) }} />
+              {series.avatar_url ? (
+                <Avatar src={series.avatar_url} name={series.label} size="xs" />
+              ) : (
+                <span className="size-2 rounded-full" style={{ backgroundColor: chart.colors(series.key) }} />
+              )}
               {series.label}
               <span className="text-slate-500">{compactNumber.format(series.total)}</span>
-              {isHidden ? <EyeOff aria-hidden="true" className="size-3" /> : <Eye aria-hidden="true" className="size-3" />}
+              {isHidden ? <EyeOff aria-hidden="true" className="no-print size-3" /> : <Eye aria-hidden="true" className="no-print size-3" />}
             </button>
           )
         })}
@@ -137,7 +142,7 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
       <div className="mt-5 overflow-x-auto">
         <svg
           viewBox={`0 0 ${chart.width} ${chart.height}`}
-          className="min-w-[680px] overflow-visible"
+          className="activity-chart-svg min-w-[680px] overflow-visible"
           role="img"
           aria-labelledby="activity-chart-title activity-chart-description"
         >
