@@ -9,7 +9,7 @@ files copied from `frontend/public`.
 - React 19 and TypeScript, built with Vite 8
 - Tailwind CSS 4 through the official Vite plugin
 - Lucide React icons
-- Go 1.26 with Chi v5
+- Go 1.26.5 with Chi v5
 - `git-changes-by-day` CLI for backend Git history analysis
 - A multi-stage Docker production image
 
@@ -32,8 +32,8 @@ files copied from `frontend/public`.
 
 Requirements:
 
-- Node.js 24 and npm
-- Go 1.26
+- Node.js 26.5.0 and npm 12.0.2
+- Go 1.26.5
 - Docker, for building the production image
 
 Start the API from one terminal:

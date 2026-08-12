@@ -1,6 +1,12 @@
-FROM node:24-alpine AS frontend-build
+FROM node:26.5.0-alpine3.24 AS frontend-build
+
+ARG NPM_VERSION=12.0.2
 
 WORKDIR /src/frontend
+
+RUN npm install --global npm@${NPM_VERSION} \
+    && node --version \
+    && npm --version
 
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -9,7 +15,7 @@ COPY frontend/ ./
 RUN npm run build
 
 
-FROM golang:1.26-alpine AS backend-build
+FROM golang:1.26.5-alpine3.24 AS backend-build
 
 ARG GIT_CHANGES_BY_DAY_VERSION=87ad8a8d0d770a120079a439cf3e9ab205c8456d
 
@@ -23,7 +29,7 @@ COPY backend/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/gait ./cmd/server
 
 
-FROM alpine:3.23 AS runtime
+FROM alpine:3.24.1 AS runtime
 
 RUN apk add --no-cache ca-certificates git \
     && addgroup -S app \
