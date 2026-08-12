@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,14 +30,23 @@ func run() error {
 	staticDir := envOrDefault("STATIC_DIR", "../frontend/dist")
 	dataDir := envOrDefault("DATA_DIR", "./data")
 	concurrency := envPositiveInteger("SYNC_CONCURRENCY", 4)
+	githubToken := githubTokenFromEnvironment()
+	githubTokenConfigured := githubToken != ""
 	manager, err := dashboard.NewManager(dashboard.ManagerConfig{
 		DataDir:     dataDir,
 		Concurrency: concurrency,
+		GitHubToken: githubToken,
 	})
+	githubToken = ""
 	if err != nil {
 		return err
 	}
 	defer manager.Close()
+	if manager.Dashboard().Snapshot == nil && githubTokenConfigured {
+		if _, err := manager.Start(""); err != nil {
+			return err
+		}
+	}
 
 	server := &http.Server{
 		Addr:              ":" + port,
@@ -99,4 +109,10 @@ func envPositiveInteger(name string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func githubTokenFromEnvironment() string {
+	token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+	_ = os.Unsetenv("GITHUB_TOKEN")
+	return token
 }

@@ -22,10 +22,12 @@ analysis, caching, and background-job work.
 
 ## How syncing works
 
-First use opens the GitHub PAT dialog and submitting a token starts an
-asynchronous sync. Later page loads immediately use the cached snapshot. The
-server retains the token only in process memory, so refresh can reuse it while
-the app is running. Saving another token in settings replaces the retained one.
+Set `GITHUB_TOKEN` at startup or submit a GitHub PAT through the first-use dialog.
+When the environment variable is present and no cached snapshot exists, the server
+starts the first asynchronous sync automatically. Later page loads immediately use
+the cached snapshot. The server retains the token only in process memory, so refresh
+can reuse it while the app is running. Saving another token in settings replaces the
+retained one.
 
 The server:
 
@@ -61,11 +63,12 @@ classification, activity bounds, working-span and inactivity days, threshold,
 scale, reason, and evaluation time. Incremental `/api/events` snapshot events
 also identify the updated repository and include its liveness metadata.
 
-The PAT is held only in frontend and backend memory for the duration of the
-request/job. It is not placed in clone URLs, Git remotes, files, snapshots,
-logs, or browser storage. Git authentication is supplied only to the relevant
-child process. Use HTTPS and external access control if the app is exposed
-beyond a trusted local network.
+The PAT is held only in backend memory while the process is running. It is not
+placed in clone URLs, Git remotes, app data, snapshots, logs, browser storage, or
+child-process environments. Git authentication is supplied only to the relevant
+Git command. A local `.env` is operator-managed plaintext and is ignored by Git;
+restrict it to trusted users. Use HTTPS and external access control if the app is
+exposed beyond a trusted local network.
 
 ### PAT access
 
@@ -114,15 +117,21 @@ Open <http://localhost:5173>. Vite proxies `/api` to
 Use a named volume so clones and statistics survive container replacement:
 
 ```sh
+cp .env.example .env
+chmod 600 .env
+# Set GITHUB_TOKEN in .env before starting the container.
+
 docker build -t gait .
 docker run --rm \
+  --env-file .env \
   -p 8080:8080 \
   -v gait-data:/app/data \
   gait
 ```
 
 Open <http://localhost:8080>. The image runs as an unprivileged user and the
-volume contains only app-owned repository clones and reports—not the PAT.
+volume contains only app-owned repository clones and reports—not the PAT. Users
+with access to the Docker daemon can inspect container environment variables.
 
 ## API
 
@@ -148,7 +157,7 @@ use daily buckets for ranges up to 62 days, weekly buckets up to two years,
 and monthly buckets for longer histories.
 
 The insight endpoints share optional `owner_id`, `repository_id`,
-`actor_kind=human|agent|unknown`, `from`, `to`, `session_hours`,
+`actor_kind=human|agent`, `from`, `to`, `session_hours`,
 `adoption_days`, `survival_days`, and `exclude_dead=true|false` filters. Session windows
 accept 1–168 hours; adoption and survival windows accept 7–180 days. Rankings
 also accept `cohort=agents|humans|human_agent|human_human` and a transparent
@@ -178,6 +187,7 @@ opaque score.
 | `DATA_DIR` | `./data` | Persistent clones, reports, and snapshot |
 | `SYNC_CONCURRENCY` | `4` | Concurrent repository workers; capped at 16 |
 | `TMPDIR` | Operating-system default | Temporary Go and CLI workspace |
+| `GITHUB_TOKEN` | unset | Fine-grained GitHub PAT retained in memory for syncs |
 
 The container sets `STATIC_DIR=/app/public`, `DATA_DIR=/app/data`, and
 `TMPDIR=/app/tmp`.

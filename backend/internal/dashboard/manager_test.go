@@ -262,6 +262,31 @@ func TestManagerReusesAndReplacesInMemoryPAT(t *testing.T) {
 	}
 }
 
+func TestManagerUsesConfiguredGitHubTokenForRefresh(t *testing.T) {
+	var received string
+	manager, err := NewManager(ManagerConfig{
+		DataDir:     t.TempDir(),
+		GitHubToken: " configured-token ",
+		Runner:      &fakeRepositoryRunner{},
+		GitHubFactory: func(token string, _ RateLimitCallbacks) (GitHubService, error) {
+			received = token
+			return &fakeGitHubService{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	defer manager.Close()
+
+	if _, err := manager.Start(""); err != nil {
+		t.Fatalf("start sync with configured token: %v", err)
+	}
+	waitForSync(t, manager)
+	if received != "configured-token" {
+		t.Fatalf("configured token was not used: %q", received)
+	}
+}
+
 func TestManagerRefreshRequiresPreviouslySuppliedPAT(t *testing.T) {
 	manager, err := NewManager(ManagerConfig{DataDir: t.TempDir()})
 	if err != nil {

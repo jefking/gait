@@ -14,13 +14,16 @@ import (
 func TestGitEnvironmentUsesEphemeralHeaderAndDisablesTracing(t *testing.T) {
 	const token = "ghp_secret"
 	environment := gitEnvironment(
-		[]string{"PATH=/usr/bin", "GIT_TRACE=1", "GIT_CURL_VERBOSE=1", "GIT_CONFIG_COUNT=9"},
+		[]string{"PATH=/usr/bin", "GIT_TRACE=1", "GIT_CURL_VERBOSE=1", "GIT_CONFIG_COUNT=9", "GITHUB_TOKEN=ambient-secret", "GH_TOKEN=another-secret"},
 		token,
 		"https://github.com/org/repo.git",
 	)
 	joined := strings.Join(environment, "\n")
 	if strings.Contains(joined, "GIT_TRACE=1") || strings.Contains(joined, "GIT_CURL_VERBOSE=1") {
 		t.Fatalf("Git tracing should be disabled around credentials: %s", joined)
+	}
+	if strings.Contains(joined, "ambient-secret") || strings.Contains(joined, "another-secret") {
+		t.Fatalf("ambient GitHub credentials appeared in the child environment: %s", joined)
 	}
 	if strings.Contains(joined, token) {
 		t.Fatalf("raw PAT appeared in child environment: %s", joined)

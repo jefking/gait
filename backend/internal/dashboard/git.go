@@ -298,7 +298,8 @@ func gitEnvironment(environment []string, token, cloneURL string) []string {
 		if strings.HasPrefix(value, "GIT_CONFIG_COUNT=") || strings.HasPrefix(value, "GIT_CONFIG_KEY_0=") ||
 			strings.HasPrefix(value, "GIT_CONFIG_VALUE_0=") || strings.HasPrefix(value, "GIT_TERMINAL_PROMPT=") ||
 			strings.HasPrefix(value, "GIT_TRACE=") || strings.HasPrefix(value, "GIT_TRACE_CURL=") ||
-			strings.HasPrefix(value, "GIT_CURL_VERBOSE=") {
+			strings.HasPrefix(value, "GIT_CURL_VERBOSE=") || strings.HasPrefix(value, "GITHUB_TOKEN=") ||
+			strings.HasPrefix(value, "GH_TOKEN=") {
 			continue
 		}
 		filtered = append(filtered, value)
