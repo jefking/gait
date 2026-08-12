@@ -83,8 +83,31 @@ const cachedDashboard: DashboardResponse = {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
+
+class FakeEventSource {
+  static instance: FakeEventSource
+  listeners = new Map<string, EventListenerOrEventListenerObject>()
+
+  constructor(readonly url: string) {
+    FakeEventSource.instance = this
+  }
+
+  addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+    this.listeners.set(type, listener)
+  }
+
+  close() {}
+
+  emit(event: { type: 'sync' | 'snapshot' | 'dashboard' | 'insights'; revision: number }) {
+    const listener = this.listeners.get('dashboard')
+    const message = new MessageEvent('dashboard', { data: JSON.stringify(event) })
+    if (typeof listener === 'function') listener(message)
+    else listener?.handleEvent(message)
+  }
+}
 
 describe('App', () => {
   it('loads cached data by default and opens credentials from settings', async () => {
@@ -170,6 +193,69 @@ describe('App', () => {
     expect(screen.queryByText('Existing ranking')).not.toBeInTheDocument()
   })
 
+  it('keeps graphs mounted and coalesces incremental snapshot updates during sync', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('EventSource', FakeEventSource)
+    let currentDashboard = cachedDashboard
+    let dashboardRequests = 0
+    let identityRequests = 0
+    let insightRequests = 0
+    const pendingIdentityRefresh = new Promise<Response>(() => undefined)
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/dashboard') {
+        dashboardRequests += 1
+        return Promise.resolve(jsonResponse(currentDashboard))
+      }
+      if (url === '/api/identities') {
+        identityRequests += 1
+        return identityRequests === 1
+          ? Promise.resolve(jsonResponse({ identities: [] }))
+          : pendingIdentityRefresh
+      }
+      if (url.startsWith('/api/insights/')) insightRequests += 1
+      if (url.startsWith('/api/insights/overview')) return Promise.resolve(jsonResponse(emptyOverview))
+      if (url.startsWith('/api/insights/network')) return Promise.resolve(jsonResponse({ meta: emptyOverview.meta, nodes: [], edges: [], total_identities: 0 }))
+      if (url.startsWith('/api/insights/ramps')) return Promise.resolve(jsonResponse({ meta: emptyOverview.meta, handoffs: [], adoptions: [] }))
+      if (url.startsWith('/api/insights/rankings')) return Promise.resolve(jsonResponse({ meta: emptyOverview.meta, cohort: 'agents', metric: 'commits', favorable_direction: 'higher', leaderboard: [], trajectories: [] }))
+      return Promise.resolve(jsonResponse({ error: 'not found' }, 404))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByText('Team constellation')).toBeInTheDocument()
+    expect(insightRequests).toBe(4)
+
+    FakeEventSource.instance.emit({ type: 'sync', revision: 1 })
+    await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+    expect(dashboardRequests).toBe(2)
+    expect(insightRequests).toBe(4)
+
+    currentDashboard = {
+      ...cachedDashboard,
+      snapshot: cachedDashboard.snapshot && {
+        ...cachedDashboard.snapshot,
+        generated_at: '2025-01-02T03:04:08Z',
+        totals: { ...cachedDashboard.snapshot.totals, commits: 3 },
+      },
+    }
+    FakeEventSource.instance.emit({ type: 'snapshot', revision: 2 })
+    FakeEventSource.instance.emit({ type: 'snapshot', revision: 3 })
+    FakeEventSource.instance.emit({ type: 'snapshot', revision: 4 })
+    await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+
+    expect(dashboardRequests).toBe(3)
+    expect(screen.getByText('Team constellation')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Identity registry' })).not.toBeInTheDocument()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(identityRequests).toBe(2)
+    expect(insightRequests).toBe(8)
+    expect(screen.getByText('Team constellation')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Loading team constellation')).not.toBeInTheDocument()
+  })
+
   it('blocks first use, submits a PAT, clears the input, and starts asynchronous progress', async () => {
     const fetchMock = mockAPI({
       snapshot: null,
@@ -236,7 +322,7 @@ describe('App', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Classify Mystery Actor as Human' }))
 
     expect(await screen.findByText('Team constellation')).toBeInTheDocument()
-    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/insights/'))).toBe(true)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/insights/'))).toBe(true))
   })
 })
 

@@ -65,7 +65,6 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
   const positions = useRef(new Map<string, { x: number; y: number }>())
   const viewport = useRef<ViewTransform>({ x: 0, y: 0, scale: 1 })
   const viewportChanged = useRef(false)
-  const renderedScope = useRef('')
   const redraw = useRef<() => void>(() => undefined)
   const selectedKeyRef = useRef(selectedKey)
   const selectedPairRef = useRef<string | undefined>(undefined)
@@ -98,10 +97,6 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
     return () => window.clearInterval(timer)
   }, [periods.length, playing])
 
-  const scope = useMemo(() => visibleNetwork
-    ? `${metric}:${visibleNetwork.nodes.map((node) => `${node.key}:${node.activity}`).join('|')}:${visibleNetwork.edges.map((edge) => `${edge.source}:${edge.target}:${edge[metric]}`).join('|')}`
-    : '', [metric, visibleNetwork])
-
   useEffect(() => {
     selectedKeyRef.current = selectedKey
     selectedPairRef.current = selectedPair
@@ -126,12 +121,6 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
     const edges: DrawEdge[] = visibleNetwork.edges.map((edge) => ({ source: edge.source, target: edge.target, data: edge }))
     const maxEdge = Math.max(1, ...visibleNetwork.edges.map((edge) => edge[metric]))
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-    if (renderedScope.current !== scope) {
-      renderedScope.current = scope
-      viewport.current = { x: 0, y: 0, scale: 1 }
-      viewportChanged.current = false
-    }
-
     const render = () => {
       context.clearRect(0, 0, width, height)
       context.fillStyle = '#020617'
@@ -179,11 +168,11 @@ export const TeamNetwork = memo(function TeamNetwork({ network, loading, selecte
     if (reducedMotion) {
       simulation.stop()
       for (let index = 0; index < 180; index += 1) simulation.tick()
-      viewport.current = fitTransform(nodes)
+      if (!viewportChanged.current) viewport.current = fitTransform(nodes)
       render()
     }
     return () => { simulation.stop(); redraw.current = () => undefined }
-  }, [visibleNetwork, scope, metric])
+  }, [visibleNetwork, metric])
 
   if (loading) return <div className="h-[470px] animate-pulse rounded-2xl bg-white/[0.03]" aria-label="Loading team constellation" />
   if (!network || network.nodes.length === 0) return <EmptyNetwork />

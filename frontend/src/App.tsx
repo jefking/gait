@@ -1,5 +1,5 @@
 import { Database, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { DashboardView } from './components/DashboardView'
 import { TokenModal } from './components/TokenModal'
 import {
@@ -26,8 +26,12 @@ import {
 
 interface KeyedResult<T> {
   key: string
+  scopeKey: string
   data: T
 }
+
+const dashboardEventBatchMilliseconds = 750
+const contentRefreshIntervalMilliseconds = 2_500
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
@@ -53,8 +57,45 @@ function App() {
   const [rampResult, setRampResult] = useState<KeyedResult<RampResponse>>()
   const [rankingResult, setRankingResult] = useState<KeyedResult<RankingResponse>>()
 
+  const contentGenerationRef = useRef('')
+  const pendingContentGenerationRef = useRef('')
+  const contentRefreshTimerRef = useRef<number | undefined>(undefined)
+  const lastContentRefreshRef = useRef(0)
+  const [contentGeneration, setContentGeneration] = useState('')
+
+  const commitContentGeneration = useCallback(() => {
+    contentRefreshTimerRef.current = undefined
+    const generation = pendingContentGenerationRef.current
+    if (!generation || generation === contentGenerationRef.current) return
+    contentGenerationRef.current = generation
+    lastContentRefreshRef.current = Date.now()
+    setContentGeneration(generation)
+  }, [])
+
+  const queueContentGeneration = useCallback((generation?: string) => {
+    if (!generation || generation === contentGenerationRef.current) return
+    pendingContentGenerationRef.current = generation
+    if (!contentGenerationRef.current) {
+      window.clearTimeout(contentRefreshTimerRef.current)
+      commitContentGeneration()
+      return
+    }
+    if (contentRefreshTimerRef.current !== undefined) return
+    const elapsed = Date.now() - lastContentRefreshRef.current
+    contentRefreshTimerRef.current = window.setTimeout(
+      commitContentGeneration,
+      Math.max(0, contentRefreshIntervalMilliseconds - elapsed),
+    )
+  }, [commitContentGeneration])
+
   const applyDashboard = useCallback((response: DashboardResponse) => {
-    setDashboard(response)
+    setDashboard((current) => ({
+      snapshot: current?.snapshot && current.snapshot.generated_at === response.snapshot?.generated_at
+        ? current.snapshot
+        : response.snapshot,
+      sync: response.sync,
+    }))
+    queueContentGeneration(response.snapshot?.generated_at)
     setDashboardError(undefined)
     if (response.sync.state === 'failed') {
       setModalMode('connect')
@@ -64,7 +105,9 @@ function App() {
       setModalMode('connect')
       setModalOpen(true)
     }
-  }, [])
+  }, [queueContentGeneration])
+
+  useEffect(() => () => window.clearTimeout(contentRefreshTimerRef.current), [])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -83,35 +126,59 @@ function App() {
   const syncActive = dashboard ? isSyncActive(dashboard.sync) : false
   const snapshotGeneratedAt = dashboard?.snapshot?.generated_at
   const identities = identityResult?.data ?? []
-  const identitiesLoading = Boolean(snapshotGeneratedAt) && identityResult?.key !== snapshotGeneratedAt
+  const identitiesLoading = Boolean(snapshotGeneratedAt) && !identityResult
   const selectedFrom = dateRange?.userSelected ? dateRange.from : undefined
   const selectedTo = dateRange?.userSelected ? dateRange.to : undefined
   const identitiesClassified = !identitiesLoading && identities.every((identity) => identity.kind !== 'unknown')
-  const insightRequestKey = dashboard?.snapshot && identitiesClassified
-    ? [dashboard.snapshot.generated_at, insightEpoch, ownerId ?? '', repositoryId ?? '', actorKind ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? '', windows.sessionHours, windows.adoptionDays, windows.survivalDays].join(':')
+  const insightScopeKey = dashboard?.snapshot && identitiesClassified
+    ? [ownerId ?? '', repositoryId ?? '', actorKind ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? '', windows.sessionHours, windows.adoptionDays, windows.survivalDays].join(':')
     : ''
-  const rankingRequestKey = insightRequestKey ? `${insightRequestKey}:${rankCohort}:${rankMetric}` : ''
+  const insightRequestKey = insightScopeKey && contentGeneration
+    ? `${contentGeneration}:${insightEpoch}:${insightScopeKey}`
+    : ''
+  const rankingScopeKey = insightScopeKey ? `${insightScopeKey}:${rankCohort}:${rankMetric}` : ''
+  const rankingRequestKey = rankingScopeKey && contentGeneration
+    ? `${contentGeneration}:${insightEpoch}:${rankingScopeKey}`
+    : ''
 
   useEffect(() => {
     let cancelled = false
     let refreshTimer: number | undefined
     let controller: AbortController | undefined
-    const unsubscribe = subscribeToDashboardEvents(() => {
-      setInsightEpoch((current) => current + 1)
-      window.clearTimeout(refreshTimer)
+    let refreshInFlight = false
+    let refreshQueued = false
+    const refreshDashboard = () => {
+      if (refreshInFlight) {
+        refreshQueued = true
+        return
+      }
+      refreshInFlight = true
+      controller = new AbortController()
+      void getDashboard(controller.signal)
+        .then((response) => {
+          if (!cancelled) applyDashboard(response)
+        })
+        .catch((error: unknown) => {
+          if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return
+          setDashboardError(error instanceof Error ? error.message : 'Could not refresh live dashboard data.')
+        })
+        .finally(() => {
+          refreshInFlight = false
+          if (refreshQueued && !cancelled) {
+            refreshQueued = false
+            scheduleRefresh()
+          }
+        })
+    }
+    const scheduleRefresh = () => {
+      if (refreshTimer !== undefined) return
       refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined
         controller?.abort()
-        controller = new AbortController()
-        void getDashboard(controller.signal)
-          .then((response) => {
-            if (!cancelled) applyDashboard(response)
-          })
-          .catch((error: unknown) => {
-            if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return
-            setDashboardError(error instanceof Error ? error.message : 'Could not refresh live dashboard data.')
-          })
-      }, 75)
-    })
+        refreshDashboard()
+      }, dashboardEventBatchMilliseconds)
+    }
+    const unsubscribe = subscribeToDashboardEvents(scheduleRefresh)
     return () => {
       cancelled = true
       window.clearTimeout(refreshTimer)
@@ -150,9 +217,9 @@ function App() {
       getInsightRamps(filters, controller.signal),
     ])
       .then(([overview, network, ramps]) => {
-        setOverviewResult({ key: insightRequestKey, data: overview })
-        setNetworkResult({ key: insightRequestKey, data: network })
-        setRampResult({ key: insightRequestKey, data: ramps })
+        setOverviewResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: overview })
+        setNetworkResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: network })
+        setRampResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: ramps })
         if (overview.meta.available_from && overview.meta.available_to) {
           setDateRange((current) =>
             current?.userSelected
@@ -171,38 +238,38 @@ function App() {
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        setOverviewResult((current) => current?.key === insightRequestKey ? current : undefined)
-        setNetworkResult((current) => current?.key === insightRequestKey ? current : undefined)
-        setRampResult((current) => current?.key === insightRequestKey ? current : undefined)
+        setOverviewResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
+        setNetworkResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
+        setRampResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
         setDashboardError(error instanceof Error ? error.message : 'Could not load Human × Agent insights.')
       })
     return () => controller.abort()
-  }, [insightRequestKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows])
+  }, [insightRequestKey, insightScopeKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows])
 
   useEffect(() => {
     if (!rankingRequestKey) return
     const controller = new AbortController()
     const filters = { ownerId, repositoryId, actorKind, excludeDead, from: selectedFrom, to: selectedTo, ...windows }
     getInsightRankings(filters, rankCohort, rankMetric, controller.signal)
-      .then((rankings) => setRankingResult({ key: rankingRequestKey, data: rankings }))
+      .then((rankings) => setRankingResult({ key: rankingRequestKey, scopeKey: rankingScopeKey, data: rankings }))
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        setRankingResult((current) => current?.key === rankingRequestKey ? current : undefined)
+        setRankingResult((current) => current?.scopeKey === rankingScopeKey ? current : undefined)
         setDashboardError(error instanceof Error ? error.message : 'Could not load rankings.')
       })
     return () => controller.abort()
-  }, [rankingRequestKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows, rankCohort, rankMetric])
+  }, [rankingRequestKey, rankingScopeKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows, rankCohort, rankMetric])
 
   useEffect(() => {
-    if (!snapshotGeneratedAt) return
+    if (!contentGeneration) return
     const controller = new AbortController()
     getIdentities(controller.signal)
-      .then((result) => setIdentityResult({ key: snapshotGeneratedAt, data: result.identities }))
+      .then((result) => setIdentityResult({ key: contentGeneration, data: result.identities }))
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === 'AbortError')) setDashboardError(error instanceof Error ? error.message : 'Could not load identities.')
       })
     return () => controller.abort()
-  }, [snapshotGeneratedAt])
+  }, [contentGeneration])
 
   const connect = async (pat: string) => {
     setSubmitting(true)
@@ -247,11 +314,11 @@ function App() {
   const changeIdentity = useCallback((key: string, update: { kind?: ActorKind; display_name?: string; canonical_key?: string; unmerge?: boolean }) => {
     void updateIdentityClassification(key, update)
       .then((result) => {
-        setIdentityResult({ key: snapshotGeneratedAt ?? '', data: result.identities })
+        setIdentityResult({ key: contentGeneration, data: result.identities })
         setInsightEpoch((current) => current + 1)
       })
       .catch((error: unknown) => setDashboardError(error instanceof Error ? error.message : 'Could not update identity.'))
-  }, [snapshotGeneratedAt])
+  }, [contentGeneration])
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -273,10 +340,10 @@ function App() {
             rankings: !rankingResult,
           }}
           insightsRefreshing={{
-            overview: Boolean(insightRequestKey) && overviewResult?.key !== insightRequestKey,
-            network: Boolean(insightRequestKey) && networkResult?.key !== insightRequestKey,
-            ramps: Boolean(insightRequestKey) && rampResult?.key !== insightRequestKey,
-            rankings: Boolean(rankingRequestKey) && rankingResult?.key !== rankingRequestKey,
+            overview: Boolean(insightRequestKey) && Boolean(overviewResult) && overviewResult?.key !== insightRequestKey,
+            network: Boolean(insightRequestKey) && Boolean(networkResult) && networkResult?.key !== insightRequestKey,
+            ramps: Boolean(insightRequestKey) && Boolean(rampResult) && rampResult?.key !== insightRequestKey,
+            rankings: Boolean(rankingRequestKey) && Boolean(rankingResult) && rankingResult?.key !== rankingRequestKey,
           }}
           identities={identities}
           identitiesLoading={identitiesLoading}
