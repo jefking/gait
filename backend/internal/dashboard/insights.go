@@ -840,6 +840,31 @@ func eventIdentities(event CommitEvent, catalog map[string]*resolvedIdentity, al
 	return result
 }
 
+func knownIdentities(identities []*resolvedIdentity) []*resolvedIdentity {
+	known := make([]*resolvedIdentity, 0, len(identities))
+	for _, identity := range identities {
+		if isKnownIdentity(identity) {
+			known = append(known, identity)
+		}
+	}
+	return known
+}
+
+func knownEventIdentities(event CommitEvent, catalog map[string]*resolvedIdentity, aliases map[string]*resolvedIdentity, overrides map[string]IdentityOverride) []*resolvedIdentity {
+	return knownIdentities(eventIdentities(event, catalog, aliases, overrides))
+}
+
+func isKnownIdentity(identity *resolvedIdentity) bool {
+	return identity != nil && (identity.Kind == ActorHuman || identity.Kind == ActorAgent)
+}
+
+func primaryKnownIdentity(identities []*resolvedIdentity) *resolvedIdentity {
+	if len(identities) == 0 || !isKnownIdentity(identities[0]) {
+		return nil
+	}
+	return identities[0]
+}
+
 func workBucket(identities []*resolvedIdentity) string {
 	human, agent, unknown := false, false, false
 	for _, identity := range identities {
@@ -868,6 +893,9 @@ func workBucket(identities []*resolvedIdentity) string {
 }
 
 func actorFilterMatchesBucket(filter ActorKind, bucket string) bool {
+	if bucket == "unknown" || filter == ActorUnknown {
+		return false
+	}
 	if filter == "" {
 		return true
 	}
@@ -877,12 +905,12 @@ func actorFilterMatchesBucket(filter ActorKind, bucket string) bool {
 	case ActorAgent:
 		return bucket == "agent_only" || bucket == "mixed"
 	default:
-		return bucket == "unknown"
+		return false
 	}
 }
 
 func actorFilterMatchesIdentity(filter ActorKind, identity *resolvedIdentity) bool {
-	return filter == "" || identity != nil && identity.Kind == filter
+	return isKnownIdentity(identity) && (filter == "" || identity.Kind == filter)
 }
 
 func insightCoverage(reports map[int64]RepositoryReport, overrides map[string]IdentityOverride, query InsightQuery) InsightCoverage {
@@ -901,16 +929,20 @@ func insightCoverage(reports map[int64]RepositoryReport, overrides map[string]Id
 			if !inInsightRange(event.CommittedAt, query) {
 				continue
 			}
-			bucket := workBucket(eventIdentities(event, catalog, aliases, overrides))
+			identities := knownEventIdentities(event, catalog, aliases, overrides)
+			if len(identities) == 0 {
+				if query.ActorKind == "" {
+					coverage.TotalCommits++
+					coverage.UnknownCommits++
+				}
+				continue
+			}
+			bucket := workBucket(identities)
 			if !actorFilterMatchesBucket(query.ActorKind, bucket) {
 				continue
 			}
 			coverage.TotalCommits++
-			if bucket == "unknown" {
-				coverage.UnknownCommits++
-			} else {
-				coverage.ClassifiedCommits++
-			}
+			coverage.ClassifiedCommits++
 			if !dayUTC(event.CommittedAt.AddDate(0, 0, query.SurvivalDays)).After(maturityCutoff) {
 				coverage.MatureCommits++
 			}
@@ -958,7 +990,7 @@ func buildNetworkWithLimit(reports map[int64]RepositoryReport, overrides map[str
 	}
 	edges := make(map[string]*edgeAccumulator)
 	ensureEdge := func(left, right *resolvedIdentity, repository string, at time.Time) *edgeAccumulator {
-		if left == nil || right == nil || left.Key == right.Key {
+		if !isKnownIdentity(left) || !isKnownIdentity(right) || left.Key == right.Key {
 			return nil
 		}
 		source, target := left, right
@@ -983,35 +1015,37 @@ func buildNetworkWithLimit(reports map[int64]RepositoryReport, overrides map[str
 		}
 		events := append([]CommitEvent(nil), report.Commits.Events...)
 		sort.Slice(events, func(i, j int) bool { return events[i].CommittedAt.Before(events[j].CommittedAt) })
-		var previous *CommitEvent
+		var previousPrimary *resolvedIdentity
+		var previousAt time.Time
 		for index := range events {
 			event := &events[index]
 			if !inInsightRange(event.CommittedAt, query) {
 				continue
 			}
-			participants := eventIdentities(*event, catalog, aliases, overrides)
+			resolved := eventIdentities(*event, catalog, aliases, overrides)
+			participants := knownIdentities(resolved)
+			primary := primaryKnownIdentity(resolved)
 			for _, identity := range participants {
 				identity.Commits++
 			}
-			if len(participants) > 1 {
-				for _, coauthor := range participants[1:] {
-					if edge := ensureEdge(participants[0], coauthor, report.Repository.FullName, event.CommittedAt); edge != nil {
+			if primary != nil && len(participants) > 1 {
+				for _, coauthor := range participants {
+					if edge := ensureEdge(primary, coauthor, report.Repository.FullName, event.CommittedAt); edge != nil {
 						edge.Coauthorships++
 					}
 				}
 			}
-			if previous != nil && event.CommittedAt.Sub(previous.CommittedAt) <= session {
-				prevParticipants := eventIdentities(*previous, catalog, aliases, overrides)
-				if len(prevParticipants) > 0 && len(participants) > 0 {
-					if edge := ensureEdge(prevParticipants[0], participants[0], report.Repository.FullName, event.CommittedAt); edge != nil {
-						edge.Handoffs++
-						if prevParticipants[0].Kind == ActorHuman && participants[0].Kind == ActorAgent {
-							edge.HumanToAgent++
-						}
+			if previousPrimary != nil && primary != nil && event.CommittedAt.Sub(previousAt) <= session {
+				if edge := ensureEdge(previousPrimary, primary, report.Repository.FullName, event.CommittedAt); edge != nil {
+					edge.Handoffs++
+					if previousPrimary.Kind == ActorHuman && primary.Kind == ActorAgent {
+						edge.HumanToAgent++
 					}
 				}
 			}
-			previous = event
+			if primary != nil {
+				previousPrimary, previousAt = primary, event.CommittedAt
+			}
 		}
 		if report.Pulls != nil {
 			for _, pull := range report.Pulls.PullRequests {
@@ -1019,8 +1053,10 @@ func buildNetworkWithLimit(reports map[int64]RepositoryReport, overrides map[str
 					continue
 				}
 				author := catalog[canonicalIdentityKey(personMetrics(pull.Author).Key, overrides)]
-				if author != nil {
+				if isKnownIdentity(author) {
 					author.PullRequests++
+				} else {
+					author = nil
 				}
 				for _, review := range pull.Reviews {
 					at := pull.CreatedAt
@@ -1031,8 +1067,10 @@ func buildNetworkWithLimit(reports map[int64]RepositoryReport, overrides map[str
 						continue
 					}
 					reviewer := catalog[canonicalIdentityKey(personMetrics(review.Author).Key, overrides)]
-					if reviewer != nil {
+					if isKnownIdentity(reviewer) {
 						reviewer.Reviews++
+					} else {
+						reviewer = nil
 					}
 					if edge := ensureEdge(author, reviewer, report.Repository.FullName, at); edge != nil {
 						edge.ReviewInteractions++
@@ -1059,6 +1097,9 @@ func buildNetworkWithLimit(reports map[int64]RepositoryReport, overrides map[str
 	}
 	nodes := make([]NetworkNode, 0, len(catalog))
 	for key, identity := range catalog {
+		if !isKnownIdentity(identity) {
+			continue
+		}
 		if query.ActorKind != "" {
 			if _, include := relevant[key]; !include {
 				continue
@@ -1153,7 +1194,11 @@ func buildOverview(reports map[int64]RepositoryReport, overrides map[string]Iden
 			if !inInsightRange(event.CommittedAt, query) {
 				continue
 			}
-			kind := workBucket(eventIdentities(event, catalog, aliases, overrides))
+			identities := knownEventIdentities(event, catalog, aliases, overrides)
+			if len(identities) == 0 {
+				continue
+			}
+			kind := workBucket(identities)
 			if !actorFilterMatchesBucket(query.ActorKind, kind) {
 				continue
 			}
@@ -1263,8 +1308,8 @@ func buildOverview(reports map[int64]RepositoryReport, overrides map[string]Iden
 			break
 		}
 	}
-	if result.Meta.Coverage.TotalCommits > 0 {
-		result.Summary.AgentParticipation = float64(agentEvents) / float64(result.Meta.Coverage.TotalCommits)
+	if result.Meta.Coverage.ClassifiedCommits > 0 {
+		result.Summary.AgentParticipation = float64(agentEvents) / float64(result.Meta.Coverage.ClassifiedCommits)
 	}
 	for id, pulse := range pulses {
 		for _, key := range keys {
@@ -1339,14 +1384,15 @@ func buildRamps(reports map[int64]RepositoryReport, overrides map[string]Identit
 			if !inInsightRange(allEvents[i].CommittedAt, query) {
 				continue
 			}
-			previousIDs, currentIDs := eventIdentities(allEvents[i-1], catalog, aliases, overrides), eventIdentities(allEvents[i], catalog, aliases, overrides)
-			if len(previousIDs) == 0 || len(currentIDs) == 0 || previousIDs[0].Kind != ActorHuman || currentIDs[0].Kind != ActorAgent || allEvents[i].CommittedAt.Sub(allEvents[i-1].CommittedAt) > session {
+			previousIdentity := primaryKnownIdentity(eventIdentities(allEvents[i-1], catalog, aliases, overrides))
+			currentIdentity := primaryKnownIdentity(eventIdentities(allEvents[i], catalog, aliases, overrides))
+			if previousIdentity == nil || currentIdentity == nil || previousIdentity.Kind != ActorHuman || currentIdentity.Kind != ActorAgent || allEvents[i].CommittedAt.Sub(allEvents[i-1].CommittedAt) > session {
 				continue
 			}
-			key := previousIDs[0].Key + "\x00" + currentIDs[0].Key
+			key := previousIdentity.Key + "\x00" + currentIdentity.Key
 			acc := pairs[key]
 			if acc == nil {
-				acc = &rampAccumulator{human: previousIDs[0], agent: currentIDs[0]}
+				acc = &rampAccumulator{human: previousIdentity, agent: currentIdentity}
 				pairs[key] = acc
 			}
 			acc.episodes++
@@ -1356,6 +1402,9 @@ func buildRamps(reports map[int64]RepositoryReport, overrides map[string]Identit
 			}
 			acc.completed++
 			for _, candidate := range allEvents {
+				if len(knownEventIdentities(candidate, catalog, aliases, overrides)) == 0 {
+					continue
+				}
 				if !candidate.CommittedAt.Before(allEvents[i].CommittedAt) && !candidate.CommittedAt.After(postEnd) {
 					acc.after++
 					if eventIsExplicitRevert(candidate) {
@@ -1388,6 +1437,9 @@ func buildRamps(reports map[int64]RepositoryReport, overrides map[string]Identit
 			var pre, after float64
 			var preReverts, afterReverts int
 			for _, event := range allEvents {
+				if len(knownEventIdentities(event, catalog, aliases, overrides)) == 0 {
+					continue
+				}
 				if !event.CommittedAt.Before(adopted) && !event.CommittedAt.After(adopted.Add(window)) {
 					after++
 					if eventIsExplicitRevert(event) {
@@ -1549,7 +1601,7 @@ func rankValues(reports map[int64]RepositoryReport, overrides map[string]Identit
 			if !inInsightRange(event.CommittedAt, query) {
 				continue
 			}
-			participants := eventIdentities(event, catalog, aliases, overrides)
+			participants := knownEventIdentities(event, catalog, aliases, overrides)
 			mature := !maturityCutoff.IsZero() && !dayUTC(event.CommittedAt.AddDate(0, 0, query.SurvivalDays)).After(maturityCutoff)
 			for _, identity := range participants {
 				if (query.Cohort == "humans" && identity.Kind != ActorHuman) || (query.Cohort == "agents" && identity.Kind != ActorAgent) {
