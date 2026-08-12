@@ -8,6 +8,7 @@ files copied from `frontend/public`.
 
 - React 19 and TypeScript, built with Vite 8
 - Tailwind CSS 4 through the official Vite plugin
+- D3.js for data visualization
 - Lucide React icons
 - Go 1.26.5 with Chi v5
 - `git-changes-by-day` CLI for backend Git history analysis
