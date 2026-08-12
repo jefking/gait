@@ -10,6 +10,7 @@ files copied from `frontend/public`.
 - Tailwind CSS 4 through the official Vite plugin
 - Lucide React icons
 - Go 1.26 with Chi v5
+- `git-changes-by-day` CLI for backend Git history analysis
 - A multi-stage Docker production image
 
 ## Project layout
@@ -71,15 +72,61 @@ curl http://localhost:8080/api/health
 The container runs as an unprivileged user and includes a health check against
 `GET /api/health`.
 
+### Git changes CLI
+
+The production image installs
+[`git-changes-by-day`](https://github.com/moltenbot000/git-changes-by-day) at
+`/usr/local/bin/git-changes-by-day`, along with its required `git` executable.
+The tool is pinned to a specific upstream commit in the Dockerfile so container
+builds remain reproducible. It is a runtime CLI, not a dependency of the
+backend Go module.
+
+Backend code can invoke it with `os/exec`, for example:
+
+```go
+command := exec.CommandContext(
+    ctx,
+    "git-changes-by-day",
+    "-repo", repositoryPath,
+    "-text-out", outputPath,
+)
+```
+
+The target repository must be available inside the container, usually through
+a read-only bind mount. The CLI and `git` both run as the container's
+unprivileged `app` user.
+
+The image provides a private, app-owned workspace at `/app/tmp` and sets
+`TMPDIR=/app/tmp`. Go code should use `os.TempDir()` and `os.CreateTemp` for
+temporary file I/O; both resolve to this directory in the container. CLI output
+paths should also be created beneath `os.TempDir()`:
+
+```go
+outputPath := filepath.Join(os.TempDir(), "commit-text.csv")
+```
+
+The image build verifies that the `app` user can execute `git`, execute
+`git-changes-by-day`, and write to `TMPDIR`.
+
+To build with another upstream commit or version:
+
+```sh
+docker build \
+  --build-arg GIT_CHANGES_BY_DAY_VERSION=<git-ref> \
+  -t gait .
+```
+
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP port used by the Go server |
 | `STATIC_DIR` | `../frontend/dist` | Directory containing the compiled frontend |
+| `TMPDIR` | Operating-system default | Temporary file workspace used by Go and child processes |
 
-The container sets `STATIC_DIR=/app/public`. During frontend development, Vite
-serves the UI, so the Go API does not require an existing frontend build.
+The container sets `STATIC_DIR=/app/public` and `TMPDIR=/app/tmp`. During
+frontend development, Vite serves the UI, so the Go API does not require an
+existing frontend build.
 
 ## Static images
 
