@@ -12,6 +12,8 @@ import {
   LockKeyhole,
   RefreshCw,
   Search,
+  Settings,
+  Skull,
   Users,
   X,
 } from 'lucide-react'
@@ -48,6 +50,7 @@ interface DashboardViewProps {
   onRepositoryChange: (id?: number) => void
   onDateRangeChange: (from: string, to: string) => void
   onRefresh: () => void
+  onSettings: () => void
 }
 
 const numbers = new Intl.NumberFormat()
@@ -70,8 +73,10 @@ export function DashboardView({
   onRepositoryChange,
   onDateRangeChange,
   onRefresh,
+  onSettings,
 }: DashboardViewProps) {
   const [search, setSearch] = useState('')
+  const [hideDead, setHideDead] = useState(false)
   const repositoriesForOwner = ownerId
     ? snapshot.repositories.filter((repository) => repository.owner.id === ownerId)
     : snapshot.repositories
@@ -80,14 +85,17 @@ export function DashboardView({
 
   const filteredRepositories = useMemo(() => {
     const query = search.trim().toLowerCase()
-    if (!query) return snapshot.repositories
-    return snapshot.repositories.filter((repository) =>
-      `${repository.full_name} ${repository.description ?? ''}`.toLowerCase().includes(query),
-    )
-  }, [search, snapshot.repositories])
+    return snapshot.repositories.filter((repository) => {
+      if (hideDead && repository.liveness?.is_dead) return false
+      return !query || `${repository.full_name} ${repository.description ?? ''}`.toLowerCase().includes(query)
+    })
+  }, [hideDead, search, snapshot.repositories])
+
+  const deadRepositories = snapshot.totals.dead_repositories
+    ?? snapshot.repositories.filter((repository) => repository.liveness?.is_dead).length
 
   const summaryCards = [
-    { label: 'Repositories', value: snapshot.totals.repositories, icon: GitFork, detail: `${snapshot.totals.owners} owners` },
+    { label: 'Repositories', value: snapshot.totals.repositories, icon: GitFork, detail: `${snapshot.totals.owners} owners · ${deadRepositories} dead` },
     { label: 'Commits', value: snapshot.totals.commits, icon: GitCommitHorizontal, detail: `${snapshot.totals.contributors} contributors` },
     { label: 'Pull requests', value: snapshot.totals.pull_requests_opened, icon: GitPullRequest, detail: `${snapshot.totals.pull_requests_merged} merged` },
     { label: 'Lines changed', value: snapshot.totals.lines_added + snapshot.totals.lines_deleted, icon: Activity, detail: `${compact.format(snapshot.totals.files_changed)} files touched` },
@@ -129,20 +137,31 @@ export function DashboardView({
             <button
               type="button"
               onClick={() => window.print()}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm font-medium text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
+              aria-label="Export PDF"
+              title="Export PDF"
+              className="grid size-10 place-items-center rounded-xl border border-white/10 bg-white/5 text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
             >
               <FileDown aria-hidden="true" className="size-4" />
-              <span className="hidden sm:inline">Export PDF</span>
-              <span className="sm:hidden">PDF</span>
             </button>
             <button
               type="button"
               onClick={onRefresh}
               disabled={isSyncActive(sync)}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm font-medium text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/5 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Refresh repositories"
+              title="Refresh repositories"
+              className="grid size-10 place-items-center rounded-xl border border-white/10 bg-white/5 text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/5 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <RefreshCw aria-hidden="true" className={`size-4 ${isSyncActive(sync) ? 'animate-spin' : ''}`} />
-              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={onSettings}
+              disabled={isSyncActive(sync)}
+              aria-label="GitHub settings"
+              title="GitHub settings"
+              className="grid size-10 place-items-center rounded-xl border border-white/10 bg-white/5 text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/5 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Settings aria-hidden="true" className="size-4" />
             </button>
           </div>
         </div>
@@ -244,17 +263,29 @@ export function DashboardView({
               <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Repository portfolio</p>
               <h2 className="mt-2 text-xl font-semibold text-white">Owners and repositories</h2>
             </div>
-            <label className="no-print relative block sm:w-72">
-              <span className="sr-only">Search repositories</span>
-              <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
-              <input
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search repositories"
-                className="w-full rounded-xl border border-white/10 bg-slate-950 py-2.5 pl-10 pr-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-400/50"
-              />
-            </label>
+            <div className="no-print flex flex-col gap-2 sm:flex-row sm:items-center">
+              <button
+                type="button"
+                aria-pressed={hideDead}
+                onClick={() => setHideDead((current) => !current)}
+                className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-medium transition ${hideDead ? 'border-rose-300/35 bg-rose-300/10 text-rose-100' : 'border-white/10 bg-slate-950 text-slate-400 hover:border-rose-300/25 hover:text-rose-200'}`}
+              >
+                <Skull aria-hidden="true" className="size-4" />
+                Hide dead
+                <span className="rounded-full bg-white/5 px-1.5 py-0.5 text-[10px] tabular-nums">{deadRepositories}</span>
+              </button>
+              <label className="relative block sm:w-72">
+                <span className="sr-only">Search repositories</span>
+                <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search repositories"
+                  className="w-full rounded-xl border border-white/10 bg-slate-950 py-2.5 pl-10 pr-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-400/50"
+                />
+              </label>
+            </div>
           </div>
 
           <div className="report-owner-list mt-6 space-y-3">
@@ -267,7 +298,7 @@ export function DashboardView({
             ))}
             {filteredRepositories.length === 0 && (
               <p className="rounded-2xl border border-dashed border-white/10 py-12 text-center text-sm text-slate-500">
-                No repositories match “{search}”.
+                {hideDead && !search ? 'All repositories are hidden by the dead-project filter.' : `No repositories match “${search}”.`}
               </p>
             )}
           </div>
@@ -404,6 +435,7 @@ function OwnerGroup({ owner, repositories }: { owner: OwnerSummary; repositories
           </div>
           <p className="mt-1 text-xs text-slate-500">
             {owner.repositories} repos · {compact.format(owner.commits)} commits · {compact.format(owner.pull_requests_opened)} PRs
+            {Boolean(owner.dead_repositories) && ` · ${owner.dead_repositories} dead`}
           </p>
         </div>
         <span className="no-print text-xs text-slate-600 transition group-open:rotate-180">⌄</span>
@@ -416,8 +448,9 @@ function OwnerGroup({ owner, repositories }: { owner: OwnerSummary; repositories
 }
 
 function RepositoryRow({ repository }: { repository: RepositorySummary }) {
+  const dead = Boolean(repository.liveness?.is_dead)
   return (
-    <article className="report-repository-row grid gap-4 border-b border-white/5 px-4 py-4 last:border-b-0 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+    <article className={`report-repository-row grid gap-4 border-b border-white/5 px-4 py-4 last:border-b-0 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center ${dead ? 'bg-rose-300/[0.035]' : ''}`}>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <a href={repository.html_url} target="_blank" rel="noreferrer" className="truncate text-sm font-semibold text-slate-200 transition hover:text-cyan-300">
@@ -426,6 +459,15 @@ function RepositoryRow({ repository }: { repository: RepositorySummary }) {
           {repository.private && <LockKeyhole aria-label="Private" className="size-3.5 text-amber-300/70" />}
           {repository.archived && <Archive aria-label="Archived" className="size-3.5 text-slate-500" />}
           {repository.fork && <GitFork aria-label="Fork" className="size-3.5 text-slate-500" />}
+          {dead && (
+            <span
+              title={livenessDescription(repository)}
+              aria-label={`Dead repository. ${livenessDescription(repository)}`}
+              className="inline-flex items-center gap-1 rounded-full border border-rose-300/20 bg-rose-300/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-200"
+            >
+              <Skull aria-hidden="true" className="size-3" /> Dead
+            </span>
+          )}
           {repository.sync_status === 'warning' && (
             <span title={repository.sync_message} className="rounded-full bg-amber-300/10 px-2 py-0.5 text-[10px] font-medium text-amber-200">cached with warning</span>
           )}
@@ -455,6 +497,18 @@ function RepositoryRow({ repository }: { repository: RepositorySummary }) {
 
 function Stat({ label, value }: { label: string; value: number }) {
   return <div><p className="text-slate-600">{label}</p><p className="mt-0.5 font-medium tabular-nums text-slate-300">{numbers.format(value)}</p></div>
+}
+
+function livenessDescription(repository: RepositorySummary) {
+  const liveness = repository.liveness
+  if (!liveness) return 'Repository liveness is unavailable.'
+  const inactive = `${numbers.format(liveness.inactive_days ?? 0)} days`
+  if (liveness.reason === 'no_default_branch_commits') {
+    return `No default-branch commits; repository has been inactive for ${inactive}.`
+  }
+  const value = liveness.threshold_value ?? liveness.threshold_days ?? 0
+  const scale = liveness.scale ?? 'day'
+  return `No default-branch changes for ${inactive}; dead threshold is ${value} ${scale}${value === 1 ? '' : 's'} (25% of its working lifespan).`
 }
 
 function formatDate(value: string) {

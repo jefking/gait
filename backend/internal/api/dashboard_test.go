@@ -125,7 +125,13 @@ func TestStartSyncAPIRejectsUnknownFields(t *testing.T) {
 
 func TestDashboardEventsStreamsInvalidations(t *testing.T) {
 	events := make(chan dashboard.DashboardEvent, 1)
-	events <- dashboard.DashboardEvent{Type: "snapshot", Revision: 7}
+	events <- dashboard.DashboardEvent{
+		Type: "snapshot", Revision: 7,
+		Repository: &dashboard.RepositoryEventMetadata{
+			ID: 9, FullName: "org/repo", SyncStatus: "synced",
+			Liveness: dashboard.RepositoryLiveness{State: dashboard.RepositoryDead, IsDead: true, Basis: "default_branch_commits"},
+		},
+	}
 	close(events)
 	service := &fakeDashboardService{events: events}
 	request := httptest.NewRequest(http.MethodGet, "/api/events", nil)
@@ -136,7 +142,7 @@ func TestDashboardEventsStreamsInvalidations(t *testing.T) {
 	if response.Header().Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("expected event stream, got %q", response.Header().Get("Content-Type"))
 	}
-	want := "event: dashboard\ndata: {\"type\":\"snapshot\",\"revision\":7}\n\n"
+	want := "event: dashboard\ndata: {\"type\":\"snapshot\",\"revision\":7,\"repository\":{\"id\":9,\"full_name\":\"org/repo\",\"sync_status\":\"synced\",\"liveness\":{\"state\":\"dead\",\"is_dead\":true,\"basis\":\"default_branch_commits\",\"evaluated_at\":\"0001-01-01T00:00:00Z\"}}}\n\n"
 	if response.Body.String() != want {
 		t.Fatalf("unexpected event body: %q", response.Body.String())
 	}

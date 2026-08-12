@@ -30,6 +30,9 @@ func TestParseCommitCSVAndContributorIdentity(t *testing.T) {
 	if stats.Daily["2024-01-02"]["github:octocat"] != 1 || stats.Daily["2024-02-03"]["git:local developer"] != 1 {
 		t.Fatalf("unexpected daily activity: %#v", stats.Daily)
 	}
+	if stats.FirstAt.Format(time.DateOnly) != "2024-01-02" || stats.LastAt.Format(time.DateOnly) != "2024-02-03" {
+		t.Fatalf("unexpected commit activity bounds: %s to %s", stats.FirstAt, stats.LastAt)
+	}
 }
 
 func TestBuildPullStatsUsesCreatedMonthAndExclusiveStates(t *testing.T) {
@@ -126,5 +129,50 @@ func TestBuildSnapshotMarksUnavailablePullRequests(t *testing.T) {
 	snapshot := BuildSnapshot(Viewer{Login: "viewer"}, []Repository{repository}, map[int64]RepositoryReport{1: report}, nil)
 	if snapshot.Repositories[0].PullRequests != nil || snapshot.Totals.RepositoriesWithoutPRAccess != 1 {
 		t.Fatalf("expected unavailable PR data, got %+v", snapshot)
+	}
+}
+
+func TestRepositoryLivenessUsesQuarterOfWorkingLifespan(t *testing.T) {
+	first := time.Date(2020, time.January, 1, 12, 0, 0, 0, time.UTC)
+	last := time.Date(2024, time.January, 1, 12, 0, 0, 0, time.UTC)
+	evaluated := time.Date(2025, time.January, 1, 12, 0, 0, 0, time.UTC)
+	liveness := BuildRepositoryLiveness(CommitStats{FirstAt: first, LastAt: last}, time.Time{}, evaluated)
+
+	if !liveness.IsDead || liveness.State != RepositoryDead || liveness.Scale != "year" {
+		t.Fatalf("expected a dead, yearly-scale repository: %+v", liveness)
+	}
+	if liveness.ActiveSpanDays != 1462 || liveness.ThresholdDays != 366 || liveness.InactiveDays != 366 || liveness.ThresholdValue != 1 {
+		t.Fatalf("unexpected lifespan-relative threshold: %+v", liveness)
+	}
+}
+
+func TestRepositoryLivenessAdaptsScaleAndHandlesEmptyRepositories(t *testing.T) {
+	evaluated := time.Date(2025, time.January, 10, 0, 0, 0, 0, time.UTC)
+	weekly := BuildRepositoryLiveness(CommitStats{
+		FirstAt: time.Date(2024, time.December, 1, 0, 0, 0, 0, time.UTC),
+		LastAt:  time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC),
+	}, time.Time{}, evaluated)
+	if weekly.Scale != "week" || weekly.ThresholdDays != 8 || weekly.IsDead != true {
+		t.Fatalf("expected weekly liveness threshold: %+v", weekly)
+	}
+
+	empty := BuildRepositoryLiveness(CommitStats{}, evaluated.AddDate(0, 0, -3), evaluated)
+	if !empty.IsDead || empty.Reason != "no_default_branch_commits" || empty.ThresholdDays != 1 {
+		t.Fatalf("expected an old empty repository to be dead: %+v", empty)
+	}
+	unknown := BuildRepositoryLiveness(CommitStats{}, time.Time{}, evaluated)
+	if unknown.State != RepositoryUnknown || unknown.IsDead {
+		t.Fatalf("expected missing commit and creation metadata to remain unknown: %+v", unknown)
+	}
+}
+
+func TestBuildSnapshotCountsDeadRepositories(t *testing.T) {
+	created := time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC)
+	repository := Repository{ID: 1, FullName: "org/dead", CreatedAt: created, Owner: OwnerIdentity{ID: 2, Login: "org"}}
+	snapshot := BuildSnapshot(Viewer{}, []Repository{repository}, map[int64]RepositoryReport{
+		1: {Repository: repository},
+	}, nil)
+	if snapshot.Totals.DeadRepositories != 1 || snapshot.Owners[0].DeadRepositories != 1 || !snapshot.Repositories[0].Liveness.IsDead {
+		t.Fatalf("expected dead metadata at repository, owner, and dashboard levels: %+v", snapshot)
 	}
 }

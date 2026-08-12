@@ -18,6 +18,11 @@ interface DraftRange {
 }
 
 const dayMilliseconds = 24 * 60 * 60 * 1000
+const rangePresets = [
+  { id: 'week', label: '7 days', start: (maximum: Date) => addDays(maximum, -6) },
+  { id: 'month', label: '31 days', start: (maximum: Date) => addDays(maximum, -30) },
+  { id: 'year', label: '1 year', start: (maximum: Date) => addYears(maximum, -1) },
+] as const
 
 export function DateRangeSlider({
   availableFrom,
@@ -50,6 +55,12 @@ export function DateRangeSlider({
   const commit = () => {
     onChange(formatISODate(selectedFrom), formatISODate(selectedTo))
   }
+  const chooseRange = (candidate: Date) => {
+    const nextFrom = candidate < minimum ? minimum : candidate
+    onChange(formatISODate(nextFrom), availableTo)
+  }
+  const allTimeSelected = formatISODate(selectedFrom) === availableFrom
+    && formatISODate(selectedTo) === availableTo
 
   return (
     <section className="mt-6 rounded-2xl border border-white/8 bg-slate-950/45 px-4 py-4 sm:px-5">
@@ -68,6 +79,34 @@ export function DateRangeSlider({
           <span className="px-2 text-slate-600">→</span>
           <time dateTime={formatISODate(selectedTo)}>{formatDisplayDate(selectedTo)}</time>
         </p>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Quick history ranges">
+        {rangePresets.map((preset) => {
+          const presetFrom = preset.start(maximum) < minimum ? minimum : preset.start(maximum)
+          const selectedPreset = !allTimeSelected
+            && formatISODate(selectedFrom) === formatISODate(presetFrom)
+            && formatISODate(selectedTo) === availableTo
+          return (
+            <button
+              key={preset.id}
+              type="button"
+              aria-pressed={selectedPreset}
+              onClick={() => chooseRange(presetFrom)}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${selectedPreset ? 'border-cyan-300/35 bg-cyan-300/10 text-cyan-100' : 'border-white/8 bg-white/[0.025] text-slate-400 hover:border-cyan-300/20 hover:text-slate-200'}`}
+            >
+              {preset.label}
+            </button>
+          )
+        })}
+        <button
+          type="button"
+          aria-pressed={allTimeSelected}
+          onClick={() => chooseRange(minimum)}
+          className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${allTimeSelected ? 'border-cyan-300/35 bg-cyan-300/10 text-cyan-100' : 'border-white/8 bg-white/[0.025] text-slate-400 hover:border-cyan-300/20 hover:text-slate-200'}`}
+        >
+          All time
+        </button>
       </div>
 
       <div className="relative mt-4 h-8" data-testid="date-range-slider">
@@ -120,6 +159,13 @@ function parseUTCDate(value: string) {
 
 function addDays(date: Date, days: number) {
   return new Date(date.getTime() + days * dayMilliseconds)
+}
+
+function addYears(date: Date, years: number) {
+  const targetYear = date.getUTCFullYear() + years
+  const targetMonth = date.getUTCMonth()
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate()
+  return new Date(Date.UTC(targetYear, targetMonth, Math.min(date.getUTCDate(), lastDay)))
 }
 
 function dayOffset(from: Date, to: Date) {

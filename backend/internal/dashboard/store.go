@@ -162,6 +162,7 @@ func repositoryFromSummary(summary RepositorySummary) Repository {
 		Private:       summary.Private,
 		Archived:      summary.Archived,
 		Fork:          summary.Fork,
+		CreatedAt:     dereferenceTime(summary.CreatedAt),
 		Owner:         summary.Owner,
 	}
 }

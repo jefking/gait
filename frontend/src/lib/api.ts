@@ -32,6 +32,14 @@ export interface RepositoryWorkflow {
 export interface DashboardEvent {
   type: 'sync' | 'snapshot' | 'dashboard'
   revision: number
+  repository?: RepositoryEventMetadata
+}
+
+export interface RepositoryEventMetadata {
+  id: number
+  full_name: string
+  sync_status: string
+  liveness: RepositoryLiveness
 }
 
 export interface Viewer {
@@ -62,6 +70,7 @@ export interface DashboardTotals {
   pull_requests_closed: number
   pull_requests_merged: number
   repositories_without_pr_access: number
+  dead_repositories?: number
 }
 
 export interface OwnerSummary {
@@ -72,6 +81,25 @@ export interface OwnerSummary {
   lines_added: number
   lines_deleted: number
   pull_requests_opened: number
+  dead_repositories?: number
+}
+
+export type RepositoryLivenessState = 'active' | 'dead' | 'unknown'
+
+export interface RepositoryLiveness {
+  state: RepositoryLivenessState
+  is_dead: boolean
+  basis: 'default_branch_commits'
+  reason?: string
+  scale?: 'day' | 'week' | 'month' | 'year'
+  threshold_value?: number
+  threshold_days?: number
+  active_span_days?: number
+  inactive_days?: number
+  first_change_at?: string
+  last_change_at?: string
+  repository_created_at?: string
+  evaluated_at: string
 }
 
 export interface ContributorSummary {
@@ -106,6 +134,7 @@ export interface RepositorySummary {
   private: boolean
   archived: boolean
   fork: boolean
+  created_at?: string
   owner: OwnerIdentity
   commits: number
   contributors: number
@@ -116,6 +145,7 @@ export interface RepositorySummary {
   last_activity_at?: string
   sync_status: string
   sync_message?: string
+  liveness?: RepositoryLiveness
 }
 
 export interface Snapshot {

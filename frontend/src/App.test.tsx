@@ -31,6 +31,7 @@ const cachedDashboard: DashboardResponse = {
       pull_requests_closed: 0,
       pull_requests_merged: 0,
       repositories_without_pr_access: 0,
+      dead_repositories: 1,
     },
     owners: [
       {
@@ -41,6 +42,7 @@ const cachedDashboard: DashboardResponse = {
         lines_added: 4,
         lines_deleted: 1,
         pull_requests_opened: 1,
+        dead_repositories: 1,
       },
     ],
     contributors: [
@@ -64,6 +66,17 @@ const cachedDashboard: DashboardResponse = {
         lines_deleted: 1,
         pull_requests: { opened: 1, open: 1, closed: 0, merged: 0 },
         sync_status: 'synced',
+        liveness: {
+          state: 'dead',
+          is_dead: true,
+          basis: 'default_branch_commits',
+          scale: 'month',
+          threshold_value: 3,
+          threshold_days: 91,
+          active_span_days: 365,
+          inactive_days: 400,
+          evaluated_at: '2025-01-02T00:00:00Z',
+        },
       },
     ],
   },
@@ -74,26 +87,40 @@ afterEach(() => {
 })
 
 describe('App', () => {
-  it('opens the PAT modal on load and can reveal cached data', async () => {
+  it('loads cached data by default and opens credentials from settings', async () => {
     const fetchMock = mockAPI()
     const print = vi.spyOn(window, 'print').mockImplementation(() => undefined)
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
-    const cachedButton = await screen.findByRole('button', { name: 'View cached data' })
-    fireEvent.click(cachedButton)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(await screen.findByText('Owners and repositories')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'hello-world' })).toBeInTheDocument()
+    expect(screen.getByText('Dead')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Hide dead/ }))
+    expect(screen.queryByRole('link', { name: 'hello-world' })).not.toBeInTheDocument()
+    expect(screen.getByText('All repositories are hidden by the dead-project filter.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Export PDF/ }))
     expect(print).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub settings' }))
+    expect(screen.getByRole('heading', { name: 'GitHub configuration' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('submits a PAT, clears the input, and starts asynchronous progress', async () => {
-    const fetchMock = mockAPI()
+  it('blocks first use, submits a PAT, clears the input, and starts asynchronous progress', async () => {
+    const fetchMock = mockAPI({
+      snapshot: null,
+      sync: {
+        state: 'idle',
+        total_repositories: 0,
+        completed_repositories: 0,
+        failed_repositories: 0,
+      },
+    })
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
-    const input = screen.getByLabelText('GitHub personal access token')
+    const input = await screen.findByLabelText('GitHub personal access token')
     fireEvent.change(input, { target: { value: 'ghp_browser_secret' } })
     fireEvent.click(screen.getByRole('button', { name: 'Connect and sync' }))
 
@@ -107,10 +134,10 @@ describe('App', () => {
   })
 })
 
-function mockAPI() {
+function mockAPI(dashboard: DashboardResponse = cachedDashboard) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
-    if (url === '/api/dashboard') return jsonResponse(cachedDashboard)
+    if (url === '/api/dashboard') return jsonResponse(dashboard)
     if (url.startsWith('/api/activity')) {
       return jsonResponse({ group_by: 'owner', metric: 'commits', series: [] })
     }

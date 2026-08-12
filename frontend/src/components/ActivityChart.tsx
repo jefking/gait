@@ -87,6 +87,7 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
       colors,
       lineBuilder,
       xTicks,
+      yMaximum,
       yTicks: y.ticks(Math.min(5, Math.max(1, Math.ceil(yMaximum)))),
     }
   }, [activity, selected])
@@ -150,6 +151,7 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
       <div className="mt-5 overflow-x-auto">
         <svg
           viewBox={`0 0 ${chart.width} ${chart.height}`}
+          data-y-maximum={chart.yMaximum}
           className="activity-chart-svg min-w-[680px] overflow-visible"
           role="img"
           aria-labelledby="activity-chart-title activity-chart-description"

@@ -4,6 +4,7 @@ import type { FormEvent } from 'react'
 
 interface TokenModalProps {
   open: boolean
+  mode?: 'connect' | 'settings'
   hasCachedData: boolean
   submitting: boolean
   error?: string
@@ -13,6 +14,7 @@ interface TokenModalProps {
 
 export function TokenModal({
   open,
+  mode = 'connect',
   hasCachedData,
   submitting,
   error,
@@ -50,11 +52,12 @@ export function TokenModal({
             <GitBranch aria-hidden="true" className="size-6" />
           </div>
           <h1 id="pat-title" className="text-2xl font-semibold tracking-tight text-white">
-            Connect your GitHub history
+            {mode === 'settings' ? 'GitHub configuration' : 'Connect your GitHub history'}
           </h1>
           <p id="pat-description" className="mt-3 text-sm leading-6 text-slate-300">
-            Enter a personal access token to discover repositories and refresh
-            their Git and pull request history.
+            {mode === 'settings'
+              ? 'Enter a different personal access token to change credentials and start a fresh repository sync.'
+              : 'Enter a personal access token to discover repositories and refresh their Git and pull request history.'}
           </p>
         </div>
 
@@ -104,7 +107,7 @@ export function TokenModal({
                 disabled={submitting}
                 className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white disabled:opacity-50"
               >
-                View cached data
+                {mode === 'settings' ? 'Cancel' : 'View cached data'}
               </button>
             )}
             <button
@@ -113,7 +116,7 @@ export function TokenModal({
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-300 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting && <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />}
-              {submitting ? 'Starting sync…' : 'Connect and sync'}
+              {submitting ? 'Starting sync…' : mode === 'settings' ? 'Save and sync' : 'Connect and sync'}
             </button>
           </div>
         </form>

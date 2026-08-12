@@ -18,7 +18,8 @@ function App() {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
   const [loadingDashboard, setLoadingDashboard] = useState(true)
   const [dashboardError, setDashboardError] = useState<string>()
-  const [modalOpen, setModalOpen] = useState(true)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [modalMode, setModalMode] = useState<'connect' | 'settings'>('connect')
   const [modalError, setModalError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
 
@@ -36,7 +37,11 @@ function App() {
     setDashboard(response)
     setDashboardError(undefined)
     if (response.sync.state === 'failed') {
+      setModalMode('connect')
       setModalError(response.sync.message || 'The sync failed.')
+      setModalOpen(true)
+    } else if (!response.snapshot && !isSyncActive(response.sync)) {
+      setModalMode('connect')
       setModalOpen(true)
     }
   }, [])
@@ -48,6 +53,8 @@ function App() {
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
         setDashboardError(error instanceof Error ? error.message : 'Could not load the dashboard.')
+        setModalMode('connect')
+        setModalOpen(true)
       })
       .finally(() => setLoadingDashboard(false))
     return () => controller.abort()
@@ -176,6 +183,12 @@ function App() {
           onDateRangeChange={(from, to) => setDateRange({ from, to, userSelected: true })}
           onRefresh={() => {
             setModalError(undefined)
+            setModalMode('settings')
+            setModalOpen(true)
+          }}
+          onSettings={() => {
+            setModalError(undefined)
+            setModalMode('settings')
             setModalOpen(true)
           }}
         />
@@ -200,6 +213,7 @@ function App() {
 
       <TokenModal
         open={modalOpen}
+        mode={modalMode}
         hasCachedData={Boolean(dashboard?.snapshot)}
         submitting={submitting}
         error={modalError}

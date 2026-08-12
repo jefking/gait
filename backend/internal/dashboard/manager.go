@@ -78,6 +78,22 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		return nil, err
 	}
 	reports, warnings := store.LoadReports(snapshot)
+	if snapshot != nil {
+		repositories := make([]Repository, 0, len(snapshot.Repositories))
+		repoStates := make(map[int64]string, len(snapshot.Repositories))
+		for _, summary := range snapshot.Repositories {
+			report, exists := reports[summary.ID]
+			if !exists {
+				continue
+			}
+			repositories = append(repositories, report.Repository)
+			repoStates[summary.ID] = report.SyncStatus
+		}
+		snapshot = BuildSnapshot(snapshot.Viewer, repositories, reports, repoStates)
+		if err := store.SaveSnapshot(snapshot); err != nil {
+			warnings = append(warnings, "Dashboard liveness metadata could not be persisted")
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
 		store:       store,
@@ -109,7 +125,7 @@ func (manager *Manager) Dashboard() DashboardResponse {
 // request or the manager is closed. Dashboard data itself remains available
 // through the regular APIs, which also makes reconnects lossless.
 func (manager *Manager) Subscribe(ctx context.Context) <-chan DashboardEvent {
-	events := make(chan DashboardEvent, 1)
+	events := make(chan DashboardEvent, 64)
 	manager.eventMu.Lock()
 	manager.subscribers[events] = struct{}{}
 	events <- DashboardEvent{Type: "dashboard", Revision: manager.revision}
@@ -131,10 +147,14 @@ func (manager *Manager) Subscribe(ctx context.Context) <-chan DashboardEvent {
 }
 
 func (manager *Manager) notify(eventType string) {
+	manager.notifyRepository(eventType, nil)
+}
+
+func (manager *Manager) notifyRepository(eventType string, repository *RepositoryEventMetadata) {
 	manager.eventMu.Lock()
 	defer manager.eventMu.Unlock()
 	manager.revision++
-	event := DashboardEvent{Type: eventType, Revision: manager.revision}
+	event := DashboardEvent{Type: eventType, Revision: manager.revision, Repository: repository}
 	for subscriber := range manager.subscribers {
 		select {
 		case subscriber <- event:
@@ -249,7 +269,7 @@ func (manager *Manager) runSync(ctx context.Context, syncID, token string) {
 
 	if len(repositories) == 0 {
 		snapshot := BuildSnapshot(viewer, repositories, reports, repoStates)
-		manager.publish(snapshot, reports)
+		manager.publish(snapshot, reports, 0)
 		if err := manager.store.SaveSnapshot(snapshot); err != nil {
 			manager.appendWarning(syncID, "Dashboard snapshot could not be persisted")
 		}
@@ -321,7 +341,7 @@ func (manager *Manager) runSync(ctx context.Context, syncID, token string) {
 			})
 		}
 		snapshot := BuildSnapshot(viewer, repositories, reports, repoStates)
-		manager.publish(snapshot, reports)
+		manager.publish(snapshot, reports, result.repository.ID)
 		if err := manager.store.SaveSnapshot(snapshot); err != nil {
 			manager.appendWarning(syncID, "Dashboard snapshot could not be persisted")
 		}
@@ -412,7 +432,7 @@ func (manager *Manager) processPullRequests(ctx context.Context, token string, g
 	return report, warnings
 }
 
-func (manager *Manager) publish(snapshot *Snapshot, reports map[int64]RepositoryReport) {
+func (manager *Manager) publish(snapshot *Snapshot, reports map[int64]RepositoryReport, repositoryID int64) {
 	copyReports := make(map[int64]RepositoryReport, len(reports))
 	for id, report := range reports {
 		copyReports[id] = report
@@ -421,7 +441,21 @@ func (manager *Manager) publish(snapshot *Snapshot, reports map[int64]Repository
 	manager.snapshot = snapshot
 	manager.reports = copyReports
 	manager.mu.Unlock()
-	manager.notify("snapshot")
+	var metadata *RepositoryEventMetadata
+	if repositoryID != 0 {
+		for _, repository := range snapshot.Repositories {
+			if repository.ID == repositoryID {
+				metadata = &RepositoryEventMetadata{
+					ID:         repository.ID,
+					FullName:   repository.FullName,
+					SyncStatus: repository.SyncStatus,
+					Liveness:   repository.Liveness,
+				}
+				break
+			}
+		}
+	}
+	manager.notifyRepository("snapshot", metadata)
 }
 
 func (manager *Manager) completeSync(syncID string) {

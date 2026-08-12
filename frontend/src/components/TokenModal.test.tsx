@@ -38,4 +38,20 @@ describe('TokenModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View cached data' }))
     expect(viewCached).toHaveBeenCalledOnce()
   })
+
+  it('presents cached credentials as an optional settings dialog', () => {
+    render(
+      <TokenModal
+        open
+        mode="settings"
+        hasCachedData
+        submitting={false}
+        onSubmit={vi.fn()}
+        onViewCached={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('heading', { name: 'GitHub configuration' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save and sync' })).toBeInTheDocument()
+  })
 })

@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -93,6 +94,9 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 		stats.LinesDeleted += linesDeleted
 		if committedAt.After(stats.LastAt) {
 			stats.LastAt = committedAt
+		}
+		if stats.FirstAt.IsZero() || committedAt.Before(stats.FirstAt) {
+			stats.FirstAt = committedAt
 		}
 	}
 
@@ -209,7 +213,7 @@ func BuildSnapshot(viewer Viewer, repositories []Repository, reports map[int64]R
 			report.SyncStatus = "cached"
 		}
 
-		repositorySummary := summarizeRepository(report)
+		repositorySummary := summarizeRepository(report, snapshot.GeneratedAt)
 		snapshot.Repositories = append(snapshot.Repositories, repositorySummary)
 
 		owner := owners[repository.Owner.ID]
@@ -221,6 +225,10 @@ func BuildSnapshot(viewer Viewer, repositories []Repository, reports map[int64]R
 			owners[repository.Owner.ID] = owner
 		}
 		owner.summary.Repositories++
+		if repositorySummary.Liveness.IsDead {
+			owner.summary.DeadRepositories++
+			snapshot.Totals.DeadRepositories++
+		}
 		owner.summary.Commits += report.Commits.Commits
 		owner.summary.LinesAdded += report.Commits.LinesAdded
 		owner.summary.LinesDeleted += report.Commits.LinesDeleted
@@ -283,7 +291,7 @@ func BuildSnapshot(viewer Viewer, repositories []Repository, reports map[int64]R
 	return snapshot
 }
 
-func summarizeRepository(report RepositoryReport) RepositorySummary {
+func summarizeRepository(report RepositoryReport, evaluatedAt time.Time) RepositorySummary {
 	repository := report.Repository
 	contributorKeys := make(map[string]struct{})
 	for key := range report.Commits.Contributors {
@@ -312,6 +320,7 @@ func summarizeRepository(report RepositoryReport) RepositorySummary {
 		Private:       repository.Private,
 		Archived:      repository.Archived,
 		Fork:          repository.Fork,
+		CreatedAt:     timePointer(repository.CreatedAt),
 		Owner:         repository.Owner,
 		Commits:       report.Commits.Commits,
 		Contributors:  len(contributorKeys),
@@ -321,12 +330,127 @@ func summarizeRepository(report RepositoryReport) RepositorySummary {
 		PullRequests:  pulls,
 		SyncStatus:    report.SyncStatus,
 		SyncMessage:   report.SyncMessage,
+		Liveness:      BuildRepositoryLiveness(report.Commits, repository.CreatedAt, evaluatedAt),
 	}
 	if !lastActivity.IsZero() {
 		last := lastActivity.UTC()
 		result.LastActivityAt = &last
 	}
 	return result
+}
+
+const repositoryDeadFraction = 0.25
+
+// BuildRepositoryLiveness classifies inactivity relative to the time a
+// repository was actively worked on. The threshold is 25% of its inclusive
+// first-to-last default-branch commit span and is described using the most
+// useful day/week/month/year scale for that span.
+func BuildRepositoryLiveness(stats CommitStats, createdAt, evaluatedAt time.Time) RepositoryLiveness {
+	evaluatedAt = dayStart(evaluatedAt)
+	result := RepositoryLiveness{
+		State:       RepositoryUnknown,
+		Basis:       "default_branch_commits",
+		EvaluatedAt: evaluatedAt,
+	}
+	if !createdAt.IsZero() {
+		created := createdAt.UTC()
+		result.RepositoryCreated = &created
+	}
+
+	first, last := commitActivityBounds(stats)
+	if last.IsZero() {
+		result.Reason = "no_default_branch_commits"
+		result.Scale = "day"
+		result.ThresholdDays = 1
+		result.ThresholdValue = 1
+		if createdAt.IsZero() {
+			return result
+		}
+		result.InactiveDays = elapsedDays(createdAt, evaluatedAt)
+		result.IsDead = result.InactiveDays >= result.ThresholdDays
+		if result.IsDead {
+			result.State = RepositoryDead
+		} else {
+			result.State = RepositoryActive
+		}
+		return result
+	}
+
+	first = first.UTC()
+	last = last.UTC()
+	result.FirstChangeAt = &first
+	result.LastChangeAt = &last
+	result.ActiveSpanDays = max(1, elapsedDays(first, last)+1)
+	result.Scale = livenessScale(result.ActiveSpanDays)
+	result.ThresholdDays = max(1, int(math.Ceil(float64(result.ActiveSpanDays)*repositoryDeadFraction)))
+	result.ThresholdValue = roundedScaleValue(result.ThresholdDays, result.Scale)
+	result.InactiveDays = elapsedDays(last, evaluatedAt)
+	result.IsDead = result.InactiveDays >= result.ThresholdDays
+	if result.IsDead {
+		result.State = RepositoryDead
+	} else {
+		result.State = RepositoryActive
+	}
+	return result
+}
+
+func commitActivityBounds(stats CommitStats) (time.Time, time.Time) {
+	first, last := stats.FirstAt, stats.LastAt
+	if !first.IsZero() && !last.IsZero() {
+		return first, last
+	}
+	for day, contributors := range stats.Daily {
+		if len(contributors) == 0 {
+			continue
+		}
+		date, err := time.Parse(time.DateOnly, day)
+		if err != nil {
+			continue
+		}
+		if first.IsZero() || date.Before(first) {
+			first = date
+		}
+		if last.IsZero() || date.After(last) {
+			last = date
+		}
+	}
+	return first, last
+}
+
+func livenessScale(activeSpanDays int) string {
+	switch {
+	case activeSpanDays >= 365:
+		return "year"
+	case activeSpanDays >= 60:
+		return "month"
+	case activeSpanDays >= 14:
+		return "week"
+	default:
+		return "day"
+	}
+}
+
+func roundedScaleValue(days int, scale string) float64 {
+	unitDays := map[string]float64{"day": 1, "week": 7, "month": 30.4375, "year": 365.25}[scale]
+	return math.Round((float64(days)/unitDays)*10) / 10
+}
+
+func elapsedDays(from, to time.Time) int {
+	days := int(dayStart(to).Sub(dayStart(from)).Hours() / 24)
+	return max(0, days)
+}
+
+func dayStart(value time.Time) time.Time {
+	value = value.UTC()
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func timePointer(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	value = value.UTC()
+	return &value
 }
 
 func mergeContributor(target map[string]*contributorAccumulator, metrics ContributorMetrics, repository Repository, key string) {

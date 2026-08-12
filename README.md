@@ -19,9 +19,10 @@ server performs all GitHub, Git, analysis, caching, and background-job work.
 
 ## How syncing works
 
-Every full page load opens the GitHub PAT dialog. Submitting a token starts an
-asynchronous sync; if a cached snapshot exists, it can be viewed without
-submitting another token.
+First use opens the GitHub PAT dialog and submitting a token starts an
+asynchronous sync. Later page loads immediately use the cached snapshot. The
+header settings or refresh controls reopen GitHub configuration when another
+credentialed sync is wanted.
 
 The server:
 
@@ -38,6 +39,21 @@ Repository workers expose their current `updating_git`, `analyzing`,
 `pull_requests`, and `publishing` workflow step. The frontend receives
 server-sent invalidation events and refreshes the canonical dashboard/activity
 APIs as each step completes; slower polling remains as a reconnect fallback.
+
+### Dead repository classification
+
+Gait marks inactive repositories with a skull and can exclude them from the
+repository portfolio. A repository's inactivity threshold is 25% of the
+inclusive span between its first and last default-branch commits. The API
+reports that threshold using a day, week, month, or year scale based on the
+length of the working span, while retaining exact day counts. Empty
+repositories use their GitHub creation time; repositories lacking both commit
+and creation metadata remain `unknown`.
+
+Each repository row in `/api/dashboard` includes `liveness` metadata with the
+classification, activity bounds, working-span and inactivity days, threshold,
+scale, reason, and evaluation time. Incremental `/api/events` snapshot events
+also identify the updated repository and include its liveness metadata.
 
 The PAT is held only in frontend and backend memory for the duration of the
 request/job. It is not placed in clone URLs, Git remotes, files, snapshots,

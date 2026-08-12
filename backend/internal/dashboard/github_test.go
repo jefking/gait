@@ -33,7 +33,7 @@ func TestGitHubClientPaginatesRepositoriesAndUsesBearerToken(t *testing.T) {
 				id := int64((page-1)*100 + index + 1)
 				items[index] = map[string]any{
 					"id": id, "name": fmt.Sprintf("repo-%d", id), "full_name": fmt.Sprintf("org/repo-%d", id),
-					"clone_url": "https://github.com/org/repo.git", "default_branch": "main",
+					"clone_url": "https://github.com/org/repo.git", "default_branch": "main", "created_at": "2020-01-02T00:00:00Z",
 					"owner": map[string]any{"id": 7, "login": "org", "type": "Organization"},
 				}
 			}
@@ -58,6 +58,9 @@ func TestGitHubClientPaginatesRepositoriesAndUsesBearerToken(t *testing.T) {
 	}
 	if len(repositories) != 101 || repoRequests.Load() != 2 {
 		t.Fatalf("expected 101 repositories over two pages, got %d over %d requests", len(repositories), repoRequests.Load())
+	}
+	if repositories[0].CreatedAt.Format(time.DateOnly) != "2020-01-02" {
+		t.Fatalf("repository creation metadata was not retained: %+v", repositories[0])
 	}
 }
 

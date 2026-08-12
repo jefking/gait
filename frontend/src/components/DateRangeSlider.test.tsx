@@ -36,4 +36,43 @@ describe('DateRangeSlider', () => {
     fireEvent.pointerUp(start)
     expect(change).toHaveBeenLastCalledWith('2024-01-05', '2024-01-11')
   })
+
+  it('offers common ranges and applies them relative to the latest activity date', () => {
+    const change = vi.fn()
+    render(
+      <DateRangeSlider
+        availableFrom="2023-01-01"
+        availableTo="2025-01-10"
+        from="2023-01-01"
+        to="2025-01-10"
+        granularity="month"
+        onChange={change}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'All time' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('button', { name: 'Past 24 hours' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '7 days' }))
+    expect(change).toHaveBeenLastCalledWith('2025-01-04', '2025-01-10')
+    fireEvent.click(screen.getByRole('button', { name: '31 days' }))
+    expect(change).toHaveBeenLastCalledWith('2024-12-11', '2025-01-10')
+    fireEvent.click(screen.getByRole('button', { name: '1 year' }))
+    expect(change).toHaveBeenLastCalledWith('2024-01-10', '2025-01-10')
+  })
+
+  it('clamps presets to the available history', () => {
+    const change = vi.fn()
+    render(
+      <DateRangeSlider
+        availableFrom="2025-01-05"
+        availableTo="2025-01-10"
+        from="2025-01-05"
+        to="2025-01-10"
+        granularity="day"
+        onChange={change}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '31 days' }))
+    expect(change).toHaveBeenLastCalledWith('2025-01-05', '2025-01-10')
+  })
 })

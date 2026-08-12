@@ -63,7 +63,7 @@ describe('ActivityChart', () => {
     expect(screen.getByRole('button', { name: /Molten-Bot/ })).toHaveAttribute('aria-pressed', 'true')
     expect(container.querySelectorAll('path[stroke-width="2.5"]')).toHaveLength(1)
     expect(container.querySelector('path[data-series-key="molten"]')).toHaveAttribute('d', expect.stringContaining('L'))
-    expect(screen.queryByText('1')).not.toBeInTheDocument()
+    expect(container.querySelector('svg.activity-chart-svg')).toHaveAttribute('data-y-maximum', '7')
   })
 
   it('plots compatibility points that provide a month instead of a date', () => {

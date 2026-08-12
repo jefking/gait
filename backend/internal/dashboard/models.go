@@ -42,8 +42,16 @@ type RepositoryWorkflow struct {
 // DashboardEvent is a lightweight invalidation signal. Clients receive it via
 // server-sent events, then read the canonical dashboard/activity APIs.
 type DashboardEvent struct {
-	Type     string `json:"type"`
-	Revision uint64 `json:"revision"`
+	Type       string                   `json:"type"`
+	Revision   uint64                   `json:"revision"`
+	Repository *RepositoryEventMetadata `json:"repository,omitempty"`
+}
+
+type RepositoryEventMetadata struct {
+	ID         int64              `json:"id"`
+	FullName   string             `json:"full_name"`
+	SyncStatus string             `json:"sync_status"`
+	Liveness   RepositoryLiveness `json:"liveness"`
 }
 
 func (status SyncStatus) Active() bool {
@@ -84,6 +92,7 @@ type DashboardTotals struct {
 	PullRequestsClosed          int `json:"pull_requests_closed"`
 	PullRequestsMerged          int `json:"pull_requests_merged"`
 	RepositoriesWithoutPRAccess int `json:"repositories_without_pr_access"`
+	DeadRepositories            int `json:"dead_repositories"`
 }
 
 type OwnerIdentity struct {
@@ -102,6 +111,31 @@ type OwnerSummary struct {
 	LinesAdded         int           `json:"lines_added"`
 	LinesDeleted       int           `json:"lines_deleted"`
 	PullRequestsOpened int           `json:"pull_requests_opened"`
+	DeadRepositories   int           `json:"dead_repositories"`
+}
+
+type RepositoryLivenessState string
+
+const (
+	RepositoryActive  RepositoryLivenessState = "active"
+	RepositoryDead    RepositoryLivenessState = "dead"
+	RepositoryUnknown RepositoryLivenessState = "unknown"
+)
+
+type RepositoryLiveness struct {
+	State             RepositoryLivenessState `json:"state"`
+	IsDead            bool                    `json:"is_dead"`
+	Basis             string                  `json:"basis"`
+	Reason            string                  `json:"reason,omitempty"`
+	Scale             string                  `json:"scale,omitempty"`
+	ThresholdValue    float64                 `json:"threshold_value,omitempty"`
+	ThresholdDays     int                     `json:"threshold_days,omitempty"`
+	ActiveSpanDays    int                     `json:"active_span_days,omitempty"`
+	InactiveDays      int                     `json:"inactive_days,omitempty"`
+	FirstChangeAt     *time.Time              `json:"first_change_at,omitempty"`
+	LastChangeAt      *time.Time              `json:"last_change_at,omitempty"`
+	RepositoryCreated *time.Time              `json:"repository_created_at,omitempty"`
+	EvaluatedAt       time.Time               `json:"evaluated_at"`
 }
 
 type ContributorSummary struct {
@@ -136,6 +170,7 @@ type RepositorySummary struct {
 	Private        bool               `json:"private"`
 	Archived       bool               `json:"archived"`
 	Fork           bool               `json:"fork"`
+	CreatedAt      *time.Time         `json:"created_at,omitempty"`
 	Owner          OwnerIdentity      `json:"owner"`
 	Commits        int                `json:"commits"`
 	Contributors   int                `json:"contributors"`
@@ -146,6 +181,7 @@ type RepositorySummary struct {
 	LastActivityAt *time.Time         `json:"last_activity_at,omitempty"`
 	SyncStatus     string             `json:"sync_status"`
 	SyncMessage    string             `json:"sync_message,omitempty"`
+	Liveness       RepositoryLiveness `json:"liveness"`
 }
 
 type ActivityGroup string
@@ -215,6 +251,7 @@ type Repository struct {
 	Private       bool
 	Archived      bool
 	Fork          bool
+	CreatedAt     time.Time
 	Owner         OwnerIdentity
 }
 
@@ -260,6 +297,7 @@ type CommitStats struct {
 	LinesAdded   int
 	LinesDeleted int
 	LastAt       time.Time
+	FirstAt      time.Time
 	Contributors map[string]ContributorMetrics
 	Daily        map[string]map[string]int
 }

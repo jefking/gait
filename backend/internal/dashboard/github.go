@@ -99,16 +99,17 @@ func (client *githubClient) Repositories(ctx context.Context) ([]Repository, err
 			"page":        {strconv.Itoa(page)},
 		}
 		var response []struct {
-			ID            int64  `json:"id"`
-			Name          string `json:"name"`
-			FullName      string `json:"full_name"`
-			CloneURL      string `json:"clone_url"`
-			HTMLURL       string `json:"html_url"`
-			Description   string `json:"description"`
-			DefaultBranch string `json:"default_branch"`
-			Private       bool   `json:"private"`
-			Archived      bool   `json:"archived"`
-			Fork          bool   `json:"fork"`
+			ID            int64     `json:"id"`
+			Name          string    `json:"name"`
+			FullName      string    `json:"full_name"`
+			CloneURL      string    `json:"clone_url"`
+			HTMLURL       string    `json:"html_url"`
+			Description   string    `json:"description"`
+			DefaultBranch string    `json:"default_branch"`
+			Private       bool      `json:"private"`
+			Archived      bool      `json:"archived"`
+			Fork          bool      `json:"fork"`
+			CreatedAt     time.Time `json:"created_at"`
 			Owner         struct {
 				ID        int64  `json:"id"`
 				Login     string `json:"login"`
@@ -136,6 +137,7 @@ func (client *githubClient) Repositories(ctx context.Context) ([]Repository, err
 				Private:       item.Private,
 				Archived:      item.Archived,
 				Fork:          item.Fork,
+				CreatedAt:     item.CreatedAt,
 				Owner: OwnerIdentity{
 					ID:        item.Owner.ID,
 					Login:     item.Owner.Login,
