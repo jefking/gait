@@ -134,7 +134,7 @@ func (runner *fakeRepositoryRunner) Analyze(_ context.Context, repositoryPath, o
 	}
 	writer := csv.NewWriter(file)
 	_ = writer.Write(commitCSVHeader)
-	_ = writer.Write([]string{"2024-01-02T03:04:05Z", "2024-01-02", filepath.Base(repositoryPath), "octocat", "The Octocat", "commit", "1", "2", "1", "3"})
+	_ = writer.Write([]string{"2024-01-02T03:04:05Z", "2024-01-02", filepath.Base(repositoryPath), "1208574+octocat@users.noreply.github.com", "octocat", "The Octocat", "commit", "1", "2", "1", "3"})
 	writer.Flush()
 	if err := writer.Error(); err != nil {
 		_ = file.Close()

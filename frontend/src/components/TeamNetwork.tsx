@@ -7,8 +7,8 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from 'd3'
-import { Bot, Maximize2, Move, Network, Pause, Play, UserRound, UsersRound, ZoomIn, ZoomOut } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Bot, CircleQuestionMark, Maximize2, Move, Network, Pause, Play, UserRound, UsersRound, ZoomIn, ZoomOut } from 'lucide-react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { ActorKind, NetworkEdge, NetworkNode, NetworkResponse } from '../lib/api'
 import { Avatar } from './Avatar'
 
@@ -58,7 +58,7 @@ const colors: Record<ActorKind, string> = {
   unknown: '#94a3b8',
 }
 
-export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassify, onRename, onMerge, onUnmerge }: TeamNetworkProps) {
+export const TeamNetwork = memo(function TeamNetwork({ network, loading, selectedKey, onSelect, onClassify, onRename, onMerge, onUnmerge }: TeamNetworkProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawNodes = useRef<DrawNode[]>([])
   const drawEdges = useRef<DrawEdge[]>([])
@@ -67,6 +67,8 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
   const viewportChanged = useRef(false)
   const renderedScope = useRef('')
   const redraw = useRef<() => void>(() => undefined)
+  const selectedKeyRef = useRef(selectedKey)
+  const selectedPairRef = useRef<string | undefined>(undefined)
   const pointerGesture = useRef<PointerGesture | undefined>(undefined)
   const [metric, setMetric] = useState<EdgeMetric>('interaction_days')
   const [periodIndex, setPeriodIndex] = useState<number>()
@@ -101,6 +103,12 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
     : '', [metric, visibleNetwork])
 
   useEffect(() => {
+    selectedKeyRef.current = selectedKey
+    selectedPairRef.current = selectedPair
+    redraw.current()
+  }, [selectedKey, selectedPair])
+
+  useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !visibleNetwork || visibleNetwork.nodes.length === 0) return
     const context = canvas.getContext('2d')
@@ -110,7 +118,7 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
       const previous = positions.current.get(node.key)
       return {
         ...node,
-        radius: 7 + Math.sqrt(node.activity / maximumActivity) * 15,
+        radius: 10 + Math.sqrt(node.activity / maximumActivity) * 15,
         x: previous?.x ?? width / 2 + Math.cos((index / Math.max(1, visibleNetwork.nodes.length)) * Math.PI * 2) * 150,
         y: previous?.y ?? height / 2 + Math.sin((index / Math.max(1, visibleNetwork.nodes.length)) * Math.PI * 2) * 120,
       }
@@ -139,7 +147,7 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
         context.beginPath()
         context.moveTo(source.x, source.y)
         context.lineTo(target.x, target.y)
-        context.strokeStyle = edgeKey(edge.data) === selectedPair ? 'rgba(255,255,255,.9)' : edge.data.pair_type === 'human_agent'
+        context.strokeStyle = edgeKey(edge.data) === selectedPairRef.current ? 'rgba(255,255,255,.9)' : edge.data.pair_type === 'human_agent'
           ? 'rgba(196,181,253,.48)'
           : edge.data.pair_type === 'human_human'
             ? 'rgba(103,232,249,.35)'
@@ -150,7 +158,7 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
       for (const node of nodes) {
         if (!node.x || !node.y) continue
         positions.current.set(node.key, { x: node.x, y: node.y })
-        drawActor(context, node, node.key === selectedKey)
+        drawActor(context, node, node.key === selectedKeyRef.current, viewport.current.scale)
       }
       context.restore()
     }
@@ -175,7 +183,7 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
       render()
     }
     return () => { simulation.stop(); redraw.current = () => undefined }
-  }, [visibleNetwork, scope, selectedKey, selectedPair, metric])
+  }, [visibleNetwork, scope, metric])
 
   if (loading) return <div className="h-[470px] animate-pulse rounded-2xl bg-white/[0.03]" aria-label="Loading team constellation" />
   if (!network || network.nodes.length === 0) return <EmptyNetwork />
@@ -217,7 +225,7 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
     const hitPadding = 8 / viewport.current.scale
     const candidate = drawNodes.current
       .map((node) => ({ node, distance: Math.hypot((node.x ?? 0) - x, (node.y ?? 0) - y) }))
-      .filter(({ node, distance }) => distance <= node.radius + hitPadding)
+      .filter(({ node, distance }) => distance <= visualNodeRadius(node, viewport.current.scale) + hitPadding)
       .sort((left, right) => left.distance - right.distance)[0]?.node
     if (candidate) {
       setSelectedPair(undefined)
@@ -322,7 +330,7 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
             onWheel={handleWheel}
             onKeyDown={handleCanvasKey}
             className={`h-auto w-full touch-none outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-300/60 ${panning ? 'cursor-grabbing' : 'cursor-grab'}`}
-            aria-label="Interactive team constellation"
+            aria-label="Interactive team constellation. Human nodes contain a user icon and agent nodes contain a bot icon."
             aria-describedby="team-constellation-help"
           />
           <div className="no-print absolute right-3 top-3 flex gap-1 rounded-2xl border border-white/10 bg-slate-950/85 p-1.5 shadow-xl backdrop-blur" aria-label="Constellation view controls">
@@ -354,7 +362,7 @@ export function TeamNetwork({ network, loading, selectedKey, onSelect, onClassif
       <div className="sr-only"><table><caption>Collaboration pairs and evidence</caption><thead><tr><th>Pair</th><th>Interaction days</th><th>Co-authorships</th><th>Reviews</th><th>Handoffs</th><th>Action</th></tr></thead><tbody>{network.edges.map((edge) => <tr key={edgeKey(edge)}><td>{pairLabel(edge, network.nodes)}</td><td>{edge.interaction_days}</td><td>{edge.coauthorships}</td><td>{edge.review_interactions}</td><td>{edge.handoffs}</td><td><button type="button" onClick={() => { onSelect(undefined); setSelectedPair(edgeKey(edge)) }}>Inspect pair</button></td></tr>)}</tbody></table></div>
     </div>
   )
-}
+})
 
 function fitTransform(nodes: DrawNode[]): ViewTransform {
   const positioned = nodes.filter((node) => Number.isFinite(node.x) && Number.isFinite(node.y))
@@ -374,36 +382,113 @@ function fitTransform(nodes: DrawNode[]): ViewTransform {
   }
 }
 
-function drawActor(context: CanvasRenderingContext2D, node: DrawNode, selected: boolean) {
+function drawActor(context: CanvasRenderingContext2D, node: DrawNode, selected: boolean, viewScale: number) {
   const x = node.x ?? 0
   const y = node.y ?? 0
+  const radius = visualNodeRadius(node, viewScale)
   context.beginPath()
   if (node.kind === 'agent') {
-    context.moveTo(x, y - node.radius)
-    context.lineTo(x + node.radius, y)
-    context.lineTo(x, y + node.radius)
-    context.lineTo(x - node.radius, y)
+    context.moveTo(x, y - radius)
+    context.lineTo(x + radius, y)
+    context.lineTo(x, y + radius)
+    context.lineTo(x - radius, y)
     context.closePath()
   } else if (node.kind === 'unknown') {
-    context.rect(x - node.radius * .72, y - node.radius * .72, node.radius * 1.44, node.radius * 1.44)
+    context.rect(x - radius * .72, y - radius * .72, radius * 1.44, radius * 1.44)
   } else {
-    context.arc(x, y, node.radius, 0, Math.PI * 2)
+    context.arc(x, y, radius, 0, Math.PI * 2)
   }
   context.fillStyle = colors[node.kind]
   context.fill()
   context.strokeStyle = selected ? '#ffffff' : '#0f172a'
-  context.lineWidth = selected ? 4 : 2
+  context.lineWidth = (selected ? 4 : 2) / viewScale
   context.stroke()
-  if (selected || node.radius > 15) {
-    context.font = '12px Inter, sans-serif'
+  drawActorIcon(context, node, radius)
+  if (selected || radius * viewScale > 15) {
+    context.font = `${12 / viewScale}px Inter, sans-serif`
     context.textAlign = 'center'
     context.fillStyle = '#e2e8f0'
-    context.fillText(node.name.slice(0, 22), x, y + node.radius + 17)
+    context.fillText(node.name.slice(0, 22), x, y + radius + 17 / viewScale)
   }
 }
 
+function visualNodeRadius(node: DrawNode, viewScale: number) {
+  return Math.max(node.radius, 13 / Math.max(0.01, viewScale))
+}
+
+function drawActorIcon(context: CanvasRenderingContext2D, node: DrawNode, radius: number) {
+  const x = node.x ?? 0
+  const y = node.y ?? 0
+  const scale = radius * 1.25 / 24
+  context.save()
+  context.translate(x - 12 * scale, y - 12 * scale)
+  context.scale(scale, scale)
+  context.strokeStyle = 'rgba(2,6,23,.9)'
+  context.lineWidth = 2
+  context.lineCap = 'round'
+  context.lineJoin = 'round'
+
+  if (node.kind === 'human') {
+    // Lucide UserRound geometry.
+    context.beginPath()
+    context.arc(12, 8, 5, 0, Math.PI * 2)
+    context.stroke()
+    context.beginPath()
+    context.moveTo(20, 21)
+    context.arc(12, 21, 8, 0, Math.PI, true)
+    context.stroke()
+  } else if (node.kind === 'agent') {
+    // Lucide Bot geometry.
+    context.beginPath()
+    context.moveTo(12, 8)
+    context.lineTo(12, 4)
+    context.lineTo(8, 4)
+    context.stroke()
+    roundedRectangle(context, 4, 8, 16, 12, 2)
+    context.stroke()
+    context.beginPath()
+    context.moveTo(2, 14)
+    context.lineTo(4, 14)
+    context.moveTo(20, 14)
+    context.lineTo(22, 14)
+    context.moveTo(9, 13)
+    context.lineTo(9, 15)
+    context.moveTo(15, 13)
+    context.lineTo(15, 15)
+    context.stroke()
+  } else {
+    // Lucide CircleQuestionMark geometry, used if unknowns are included.
+    context.beginPath()
+    context.arc(12, 12, 10, 0, Math.PI * 2)
+    context.stroke()
+    context.beginPath()
+    context.moveTo(9.09, 9)
+    context.bezierCurveTo(9.48, 7.52, 10.7, 6.7, 12.17, 6.7)
+    context.bezierCurveTo(13.83, 6.7, 15, 7.75, 15, 9.3)
+    context.bezierCurveTo(15, 11.2, 12, 12, 12, 14)
+    context.moveTo(12, 17)
+    context.lineTo(12.01, 17)
+    context.stroke()
+  }
+  context.restore()
+}
+
+function roundedRectangle(context: CanvasRenderingContext2D, x: number, y: number, boxWidth: number, boxHeight: number, radius: number) {
+  context.beginPath()
+  context.moveTo(x + radius, y)
+  context.lineTo(x + boxWidth - radius, y)
+  context.quadraticCurveTo(x + boxWidth, y, x + boxWidth, y + radius)
+  context.lineTo(x + boxWidth, y + boxHeight - radius)
+  context.quadraticCurveTo(x + boxWidth, y + boxHeight, x + boxWidth - radius, y + boxHeight)
+  context.lineTo(x + radius, y + boxHeight)
+  context.quadraticCurveTo(x, y + boxHeight, x, y + boxHeight - radius)
+  context.lineTo(x, y + radius)
+  context.quadraticCurveTo(x, y, x + radius, y)
+  context.closePath()
+}
+
 function Legend({ kind, label }: { kind: ActorKind; label: string }) {
-  return <span className="inline-flex items-center gap-1.5"><span className={`size-2.5 ${kind === 'human' ? 'rounded-full' : kind === 'agent' ? 'rotate-45 rounded-[2px]' : 'rounded-[1px]'}`} style={{ backgroundColor: colors[kind] }} />{label}</span>
+  return <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="grid size-6 place-items-center rounded-lg text-slate-950" style={{ backgroundColor: colors[kind] }}><ActorIcon kind={kind} /></span>{label}</span>
 }
 
 function IdentityDetail({ node, allNodes, onClassify, onRename, onMerge, onUnmerge }: { node: NetworkNode; allNodes: NetworkNode[]; onClassify: TeamNetworkProps['onClassify']; onRename: TeamNetworkProps['onRename']; onMerge: TeamNetworkProps['onMerge']; onUnmerge: TeamNetworkProps['onUnmerge'] }) {
@@ -439,4 +524,4 @@ function MiniStat({ label, value }: { label: string; value: number }) { return <
 
 function EmptyNetwork() { return <div className="grid min-h-80 place-items-center rounded-2xl border border-dashed border-white/10 text-center"><div><Network className="mx-auto size-7 text-slate-600" /><p className="mt-3 text-sm text-slate-400">No collaboration evidence matches this scope.</p><p className="mt-1 text-xs text-slate-600">Unknown identities remain visible once event-level analysis is available.</p></div></div> }
 
-export function ActorIcon({ kind }: { kind: ActorKind }) { return kind === 'agent' ? <Bot className="size-4" /> : kind === 'human' ? <UserRound className="size-4" /> : <UsersRound className="size-4" /> }
+export function ActorIcon({ kind }: { kind: ActorKind }) { return kind === 'agent' ? <Bot className="size-4" /> : kind === 'human' ? <UserRound className="size-4" /> : <CircleQuestionMark className="size-4" /> }

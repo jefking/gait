@@ -99,14 +99,16 @@ describe('Human × Agent charts', () => {
       nodes: [{ ...identity('alice', 'Alice', 'human'), activity: 2 }, { ...identity('helper', 'Helper', 'agent'), activity: 2 }],
       edges: [{ source: 'alice', target: 'helper', pair_type: 'human_agent', interaction_days: 2, coauthorships: 0, review_interactions: 0, handoffs: 2, human_to_agent: 2, repositories: ['org/repo'], periods: ['2025-01-01', '2025-01-02'] }],
     }
-    render(<TeamNetwork network={network} loading={false} onSelect={() => undefined} onClassify={() => undefined} onRename={() => undefined} onMerge={() => undefined} onUnmerge={() => undefined} />)
+    const { container } = render(<TeamNetwork network={network} loading={false} onSelect={() => undefined} onClassify={() => undefined} onRename={() => undefined} onMerge={() => undefined} onUnmerge={() => undefined} />)
     expect(screen.getByRole('slider', { name: 'Network playback period' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Play' })).toBeInTheDocument()
+    expect(container.querySelector('.lucide-user-round')).toBeInTheDocument()
+    expect(container.querySelector('.lucide-bot')).toBeInTheDocument()
     expect(screen.getByText(/Drag to pan · Scroll to zoom/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Zoom in team constellation' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Zoom out team constellation' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Fit team constellation to view' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Interactive team constellation')).toHaveAttribute('tabindex', '0')
+    expect(screen.getByLabelText(/Human nodes contain a user icon and agent nodes contain a bot icon/)).toHaveAttribute('tabindex', '0')
   })
 })
 

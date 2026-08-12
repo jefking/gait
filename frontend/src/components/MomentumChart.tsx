@@ -1,6 +1,6 @@
 import { axisBottom, axisLeft, line, max, scaleBand, scaleLinear, scaleUtc, select, stack, utcFormat, utcParse } from 'd3'
 import { GitCommitHorizontal, Grid3X3, LineChart } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { OverviewResponse, TimelinePoint } from '../lib/api'
 
 interface MomentumChartProps { overview: OverviewResponse | null; loading: boolean }
@@ -10,7 +10,7 @@ const tickDate = utcFormat('%b %Y')
 const workKeys = ['human_only', 'agent_only', 'mixed', 'unknown'] as const
 const workColors = { human_only: '#22d3ee', agent_only: '#8b5cf6', mixed: '#f59e0b', unknown: '#64748b' }
 
-export function MomentumChart({ overview, loading }: MomentumChartProps) {
+export const MomentumChart = memo(function MomentumChart({ overview, loading }: MomentumChartProps) {
   const [view, setView] = useState<'timeline' | 'pulse'>('timeline')
   if (loading) return <div className="h-[520px] animate-pulse rounded-2xl bg-white/[0.03]" aria-label="Loading momentum and quality" />
   if (!overview || overview.timeline.length === 0) return <Empty />
@@ -29,7 +29,7 @@ export function MomentumChart({ overview, loading }: MomentumChartProps) {
       {view === 'timeline' ? <Timeline overview={overview} /> : <RepositoryPulseChart overview={overview} />}
     </div>
   )
-}
+})
 
 const labels = { human_only: 'Human-only', agent_only: 'Agent-only', mixed: 'Mixed', unknown: 'Unknown' }
 

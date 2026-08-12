@@ -85,7 +85,7 @@ Requirements:
 Install the analyzer pinned by the production image:
 
 ```sh
-go install github.com/moltenbot000/git-changes-by-day@87ad8a8d0d770a120079a439cf3e9ab205c8456d
+go install github.com/moltenbot000/git-changes-by-day@92df0c374280bc4481d6e81a547a796572e72353
 ```
 
 Start the API:

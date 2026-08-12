@@ -529,11 +529,13 @@ func insightMaturityCutoff(query InsightQuery) time.Time {
 
 func buildIdentityCatalog(reports map[int64]RepositoryReport, overrides map[string]IdentityOverride) map[string]*resolvedIdentity {
 	catalog := make(map[string]*resolvedIdentity)
+	usedOverrides := make(map[string]struct{})
+	stableMigrations := stableIdentityMigrations(reports, overrides)
 	add := func(person ContributorMetrics) *resolvedIdentity {
 		if person.Key == "" {
 			return nil
 		}
-		canonical := canonicalIdentityKey(person.Key, overrides)
+		canonical := canonicalPersonIdentityKey(person, overrides, stableMigrations)
 		identity := catalog[canonical]
 		if identity == nil {
 			summary := classifyIdentity(person)
@@ -542,7 +544,15 @@ func buildIdentityCatalog(reports map[int64]RepositoryReport, overrides map[stri
 			catalog[canonical] = identity
 		}
 		identity.aliases[person.Key] = struct{}{}
+		legacyKey := legacyPersonIdentityKey(person)
+		if _, exists := overrides[legacyKey]; legacyKey != "" && legacyKey != person.Key && exists {
+			identity.aliases[legacyKey] = struct{}{}
+			usedOverrides[legacyKey] = struct{}{}
+		}
+		usedOverrides[person.Key] = struct{}{}
+		usedOverrides[canonical] = struct{}{}
 		mergeIdentityMetadata(&identity.IdentitySummary, person)
+		applyIdentityOverride(&identity.IdentitySummary, overrides[legacyKey])
 		applyIdentityOverride(&identity.IdentitySummary, overrides[person.Key])
 		applyIdentityOverride(&identity.IdentitySummary, overrides[canonical])
 		return identity
@@ -555,7 +565,7 @@ func buildIdentityCatalog(reports map[int64]RepositoryReport, overrides map[stri
 			}
 			seen := make(map[string]struct{})
 			for _, participant := range participants {
-				canonical := canonicalIdentityKey(participant.Key, overrides)
+				canonical := canonicalPersonIdentityKey(participant, overrides, stableMigrations)
 				if _, exists := seen[canonical]; exists {
 					continue
 				}
@@ -585,6 +595,9 @@ func buildIdentityCatalog(reports map[int64]RepositoryReport, overrides map[stri
 		}
 	}
 	for key, override := range overrides {
+		if _, used := usedOverrides[key]; used {
+			continue
+		}
 		if _, exists := catalog[canonicalIdentityKey(key, overrides)]; exists {
 			continue
 		}
@@ -644,6 +657,63 @@ func canonicalIdentityKey(key string, overrides map[string]IdentityOverride) str
 		current = next
 	}
 	return current
+}
+
+func canonicalPersonIdentityKey(person ContributorMetrics, overrides map[string]IdentityOverride, stableMigrations map[string]string) string {
+	canonical := canonicalIdentityKey(person.Key, overrides)
+	if canonical != person.Key {
+		return canonical
+	}
+	if migrated := stableMigrations[person.Key]; migrated != "" {
+		return migrated
+	}
+	return canonical
+}
+
+func stableIdentityMigrations(reports map[int64]RepositoryReport, overrides map[string]IdentityOverride) map[string]string {
+	targets := make(map[string]map[string]struct{})
+	for _, report := range reports {
+		for _, event := range report.Commits.Events {
+			participants := event.Participants
+			if len(participants) == 0 {
+				participants = append([]ContributorMetrics{event.Author}, commitCoauthors(event.Message)...)
+			}
+			for _, person := range participants {
+				if !strings.HasPrefix(person.Key, "email:") || canonicalIdentityKey(person.Key, overrides) != person.Key {
+					continue
+				}
+				legacyKey := legacyPersonIdentityKey(person)
+				if legacyKey == "" {
+					continue
+				}
+				target := canonicalIdentityKey(legacyKey, overrides)
+				if target == legacyKey {
+					continue
+				}
+				if targets[person.Key] == nil {
+					targets[person.Key] = make(map[string]struct{})
+				}
+				targets[person.Key][target] = struct{}{}
+			}
+		}
+	}
+	migrations := make(map[string]string)
+	for key, candidates := range targets {
+		if len(candidates) != 1 {
+			continue
+		}
+		for target := range candidates {
+			migrations[key] = target
+		}
+	}
+	return migrations
+}
+
+func legacyPersonIdentityKey(person ContributorMetrics) string {
+	if strings.TrimSpace(person.Name) == "" {
+		return ""
+	}
+	return gitIdentityKey(person.Name)
 }
 
 func applyIdentityOverride(identity *IdentitySummary, override IdentityOverride) {
@@ -710,7 +780,17 @@ func personMetrics(person Person) ContributorMetrics {
 	return ContributorMetrics{Key: key, Login: login, Name: name, AvatarURL: person.AvatarURL, Type: person.Type}
 }
 
-func eventIdentities(event CommitEvent, catalog map[string]*resolvedIdentity, overrides map[string]IdentityOverride) []*resolvedIdentity {
+func identityAliasIndex(catalog map[string]*resolvedIdentity) map[string]*resolvedIdentity {
+	index := make(map[string]*resolvedIdentity)
+	for _, identity := range catalog {
+		for alias := range identity.aliases {
+			index[alias] = identity
+		}
+	}
+	return index
+}
+
+func eventIdentities(event CommitEvent, catalog map[string]*resolvedIdentity, aliases map[string]*resolvedIdentity, overrides map[string]IdentityOverride) []*resolvedIdentity {
 	people := event.Participants
 	if len(people) == 0 {
 		people = append([]ContributorMetrics{event.Author}, commitCoauthors(event.Message)...)
@@ -719,13 +799,27 @@ func eventIdentities(event CommitEvent, catalog map[string]*resolvedIdentity, ov
 	seen := make(map[string]struct{})
 	for _, person := range people {
 		key := canonicalIdentityKey(person.Key, overrides)
+		identity := catalog[key]
+		if identity == nil {
+			identity = aliases[person.Key]
+		}
+		if identity == nil {
+			legacyKey := legacyPersonIdentityKey(person)
+			legacyCanonical := canonicalIdentityKey(legacyKey, overrides)
+			if legacyKey != "" && legacyCanonical != legacyKey && catalog[legacyCanonical] != nil {
+				key = legacyCanonical
+				identity = catalog[key]
+			}
+		}
+		if identity == nil {
+			continue
+		}
+		key = identity.Key
 		if _, exists := seen[key]; exists {
 			continue
 		}
-		if identity := catalog[key]; identity != nil {
-			seen[key] = struct{}{}
-			result = append(result, identity)
-		}
+		seen[key] = struct{}{}
+		result = append(result, identity)
 	}
 	return result
 }

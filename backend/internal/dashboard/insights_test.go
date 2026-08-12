@@ -149,6 +149,67 @@ func TestIdentityOverridesAndAliasesAreAppliedWithoutDoubleCounting(t *testing.T
 	}
 }
 
+func TestStableEmailIdentityReusesLegacyClassificationAndMerge(t *testing.T) {
+	at := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
+	reports := map[int64]RepositoryReport{1: {
+		Repository: Repository{ID: 1, Owner: OwnerIdentity{ID: 2}},
+		Commits: CommitStats{Events: []CommitEvent{
+			{Hash: "a", CommittedAt: at, Author: ContributorMetrics{Key: "email:alex@example.com", Name: "Alex"}},
+			{Hash: "b", CommittedAt: at.Add(time.Hour), Author: ContributorMetrics{Key: "github:alex", Login: "alex", Name: "Alex"}},
+			{Hash: "c", CommittedAt: at.Add(2 * time.Hour), Author: ContributorMetrics{Key: "email:alex@example.com", Name: "A. Lex"}},
+		}},
+	}}
+	overrides := map[string]IdentityOverride{
+		"git:alex":    {Kind: ActorAgent, CanonicalKey: "github:alex"},
+		"github:alex": {Kind: ActorAgent, DisplayName: "Alex Agent"},
+	}
+
+	catalog := buildIdentityCatalog(reports, overrides)
+	identity := catalog["github:alex"]
+	if len(catalog) != 1 || identity == nil || identity.Kind != ActorAgent || identity.Name != "Alex Agent" || identity.Commits != 3 {
+		t.Fatalf("unexpected migrated stable identity: %#v", catalog)
+	}
+	if _, exists := identity.aliases["email:alex@example.com"]; !exists {
+		t.Fatalf("stable email alias was not retained: %#v", identity.aliases)
+	}
+	if _, exists := identity.aliases["git:alex"]; !exists {
+		t.Fatalf("legacy override alias was not retained: %#v", identity.aliases)
+	}
+}
+
+func TestStableEmailIdentityIgnoresConflictingLegacyMergeTargets(t *testing.T) {
+	at := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
+	reports := map[int64]RepositoryReport{1: {
+		Commits: CommitStats{Events: []CommitEvent{
+			{Hash: "a", CommittedAt: at, Author: ContributorMetrics{Key: "email:shared@example.com", Name: "First Name"}},
+			{Hash: "b", CommittedAt: at.Add(time.Hour), Author: ContributorMetrics{Key: "email:shared@example.com", Name: "Second Name"}},
+		}},
+	}}
+	overrides := map[string]IdentityOverride{
+		"git:first name":  {CanonicalKey: "github:first"},
+		"git:second name": {CanonicalKey: "github:second"},
+	}
+
+	catalog := buildIdentityCatalog(reports, overrides)
+	identity := catalog["email:shared@example.com"]
+	if len(catalog) != 1 || identity == nil || identity.Commits != 2 {
+		t.Fatalf("conflicting legacy targets split a stable identity: %#v", catalog)
+	}
+}
+
+func TestStableEmailIdentityReusesLegacyKindWithoutCreatingGhost(t *testing.T) {
+	at := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
+	reports := map[int64]RepositoryReport{1: {
+		Commits: CommitStats{Events: []CommitEvent{{Hash: "a", CommittedAt: at, Author: ContributorMetrics{Key: "email:helper@example.com", Name: "Helper"}}}},
+	}}
+
+	catalog := buildIdentityCatalog(reports, map[string]IdentityOverride{"git:helper": {Kind: ActorAgent}})
+	identity := catalog["email:helper@example.com"]
+	if len(catalog) != 1 || identity == nil || identity.Kind != ActorAgent || identity.Commits != 1 {
+		t.Fatalf("unexpected migrated classification: %#v", catalog)
+	}
+}
+
 func TestInsightQueryValidatesAnalysisWindows(t *testing.T) {
 	if _, _, err := prepareInsightQuery(nil, InsightQuery{SessionHours: 169}); err == nil {
 		t.Fatal("expected invalid session window")

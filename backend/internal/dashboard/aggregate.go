@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,20 @@ import (
 )
 
 var commitCSVHeader = []string{
+	"datetime",
+	"date",
+	"commit_hash",
+	"author_email",
+	"github_author_handle",
+	"github_author_display_name",
+	"text",
+	"files_changed",
+	"lines_added",
+	"lines_deleted",
+	"lines_changed",
+}
+
+var legacyCommitCSVHeader = []string{
 	"datetime",
 	"date",
 	"commit_hash",
@@ -35,14 +50,15 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 	if err != nil {
 		return stats, fmt.Errorf("read commit CSV header: %w", err)
 	}
-	if len(header) != len(commitCSVHeader) {
-		return stats, fmt.Errorf("commit CSV has %d columns; expected %d", len(header), len(commitCSVHeader))
+	hasAuthorEmail := slices.Equal(header, commitCSVHeader)
+	if !hasAuthorEmail && !slices.Equal(header, legacyCommitCSVHeader) {
+		return stats, fmt.Errorf("unsupported commit CSV header %q", strings.Join(header, ","))
 	}
-	for index := range header {
-		if header[index] != commitCSVHeader[index] {
-			return stats, fmt.Errorf("commit CSV column %d is %q; expected %q", index+1, header[index], commitCSVHeader[index])
-		}
+	columnOffset := 0
+	if hasAuthorEmail {
+		columnOffset = 1
 	}
+	expectedColumns := len(legacyCommitCSVHeader) + columnOffset
 
 	for {
 		record, readErr := records.Read()
@@ -52,28 +68,36 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 		if readErr != nil {
 			return stats, fmt.Errorf("read commit CSV: %w", readErr)
 		}
-		if len(record) != len(commitCSVHeader) {
-			return stats, fmt.Errorf("commit CSV row has %d columns; expected %d", len(record), len(commitCSVHeader))
+		if len(record) != expectedColumns {
+			return stats, fmt.Errorf("commit CSV row has %d columns; expected %d", len(record), expectedColumns)
 		}
 
 		committedAt, parseErr := time.Parse(time.RFC3339, record[0])
 		if parseErr != nil {
 			return stats, fmt.Errorf("parse commit datetime %q: %w", record[0], parseErr)
 		}
-		filesChanged, parseErr := parseCSVInteger("files_changed", record[6])
+		filesChanged, parseErr := parseCSVInteger("files_changed", record[6+columnOffset])
 		if parseErr != nil {
 			return stats, parseErr
 		}
-		linesAdded, parseErr := parseCSVInteger("lines_added", record[7])
+		linesAdded, parseErr := parseCSVInteger("lines_added", record[7+columnOffset])
 		if parseErr != nil {
 			return stats, parseErr
 		}
-		linesDeleted, parseErr := parseCSVInteger("lines_deleted", record[8])
+		linesDeleted, parseErr := parseCSVInteger("lines_deleted", record[8+columnOffset])
 		if parseErr != nil {
 			return stats, parseErr
 		}
 
-		contributor := commitContributor(record[3], record[4])
+		authorEmail := ""
+		if hasAuthorEmail {
+			authorEmail = record[3]
+		}
+		actor := commitContributor(authorEmail, record[3+columnOffset], record[4+columnOffset])
+		contributor := stats.Contributors[actor.Key]
+		if contributor.Key == "" {
+			contributor = actor
+		}
 		contributor.Commits++
 		contributor.FilesChanged += filesChanged
 		contributor.LinesAdded += linesAdded
@@ -81,12 +105,18 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 		if committedAt.After(contributor.LastActivityAt) {
 			contributor.LastActivityAt = committedAt
 		}
-		stats.Contributors[contributor.Key] = contributor
+		stats.Contributors[actor.Key] = contributor
+		eventAuthor := actor
+		eventAuthor.Commits = 1
+		eventAuthor.FilesChanged = filesChanged
+		eventAuthor.LinesAdded = linesAdded
+		eventAuthor.LinesDeleted = linesDeleted
+		eventAuthor.LastActivityAt = committedAt
 		stats.Events = append(stats.Events, CommitEvent{
 			Hash:         record[2],
 			CommittedAt:  committedAt.UTC(),
-			Author:       contributor,
-			Message:      record[5],
+			Author:       eventAuthor,
+			Message:      record[5+columnOffset],
 			FilesChanged: filesChanged,
 			LinesAdded:   linesAdded,
 			LinesDeleted: linesDeleted,
@@ -96,7 +126,7 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 		if stats.Daily[day] == nil {
 			stats.Daily[day] = make(map[string]int)
 		}
-		stats.Daily[day][contributor.Key]++
+		stats.Daily[day][actor.Key]++
 		stats.Commits++
 		stats.FilesChanged += filesChanged
 		stats.LinesAdded += linesAdded
@@ -120,7 +150,8 @@ func parseCSVInteger(name, value string) (int, error) {
 	return parsed, nil
 }
 
-func commitContributor(handle, displayName string) ContributorMetrics {
+func commitContributor(authorEmail, handle, displayName string) ContributorMetrics {
+	authorEmail = strings.ToLower(strings.TrimSpace(authorEmail))
 	handle = strings.TrimSpace(handle)
 	displayName = strings.TrimSpace(displayName)
 	if handle != "" {
@@ -135,11 +166,20 @@ func commitContributor(handle, displayName string) ContributorMetrics {
 			AvatarURL: "https://github.com/" + url.PathEscape(handle) + ".png?size=80",
 		}
 	}
+	if authorEmail != "" {
+		if displayName == "" {
+			displayName = authorEmail
+		}
+		return ContributorMetrics{Key: "email:" + authorEmail, Name: displayName}
+	}
 	if displayName == "" {
 		displayName = "Unknown contributor"
 	}
-	normalized := strings.ToLower(strings.Join(strings.Fields(displayName), " "))
-	return ContributorMetrics{Key: "git:" + normalized, Name: displayName}
+	return ContributorMetrics{Key: gitIdentityKey(displayName), Name: displayName}
+}
+
+func gitIdentityKey(displayName string) string {
+	return "git:" + strings.ToLower(strings.Join(strings.Fields(displayName), " "))
 }
 
 func BuildPullStats(pulls []PullRequest) PullStats {

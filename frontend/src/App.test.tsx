@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import type { DashboardResponse, IdentitySummary } from './lib/api'
@@ -125,6 +125,49 @@ describe('App', () => {
       url === '/api/sync' && init?.body === JSON.stringify({}),
     )).toBe(true))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('keeps existing graphs mounted and only refreshes ranking data for ranking selections', async () => {
+    let rankingRequests = 0
+    let resolveRanking!: (response: Response) => void
+    const pendingRanking = new Promise<Response>((resolve) => { resolveRanking = resolve })
+    const ranking = (label: string, cohort: 'agents' | 'humans') => ({
+      meta: emptyOverview.meta,
+      cohort,
+      metric: 'commits',
+      favorable_direction: 'higher',
+      leaderboard: [{ key: label, label, rank: 1, value: 2, eligible: true, metrics: { commits: 2 } }],
+      trajectories: [],
+    })
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/dashboard') return Promise.resolve(jsonResponse(cachedDashboard))
+      if (url.startsWith('/api/insights/overview')) return Promise.resolve(jsonResponse(emptyOverview))
+      if (url.startsWith('/api/insights/network')) return Promise.resolve(jsonResponse({ meta: emptyOverview.meta, nodes: [], edges: [], total_identities: 0 }))
+      if (url.startsWith('/api/insights/ramps')) return Promise.resolve(jsonResponse({ meta: emptyOverview.meta, handoffs: [], adoptions: [] }))
+      if (url.startsWith('/api/insights/rankings')) {
+        rankingRequests += 1
+        return rankingRequests === 1 ? Promise.resolve(jsonResponse(ranking('Existing ranking', 'agents'))) : pendingRanking
+      }
+      if (url === '/api/identities') return Promise.resolve(jsonResponse({ identities: [] }))
+      return Promise.resolve(jsonResponse({ error: 'not found' }, 404))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    expect(await screen.findByText('Existing ranking')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Ranking cohort' }), { target: { value: 'humans' } })
+
+    expect(screen.getByText('Existing ranking')).toBeInTheDocument()
+    expect(screen.getByText('Updating')).toBeInTheDocument()
+    await waitFor(() => expect(rankingRequests).toBe(2))
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/insights/overview'))).toHaveLength(1)
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/insights/network'))).toHaveLength(1)
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/insights/ramps'))).toHaveLength(1)
+
+    act(() => resolveRanking(jsonResponse(ranking('Updated ranking', 'humans'))))
+    expect(await screen.findByText('Updated ranking')).toBeInTheDocument()
+    expect(screen.queryByText('Existing ranking')).not.toBeInTheDocument()
   })
 
   it('blocks first use, submits a PAT, clears the input, and starts asynchronous progress', async () => {

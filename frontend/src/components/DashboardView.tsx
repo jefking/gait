@@ -14,7 +14,7 @@ import {
   UsersRound,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import type {
   ActorKind,
   InsightBundle,
@@ -37,8 +37,9 @@ import { TeamNetwork } from './TeamNetwork'
 interface DashboardViewProps {
   snapshot: Snapshot
   sync: SyncStatus
-  insights: InsightBundle | null
-  insightsLoading: boolean
+  insights: { [Key in keyof InsightBundle]: InsightBundle[Key] | null }
+  insightsLoading: Record<keyof InsightBundle, boolean>
+  insightsRefreshing: Record<keyof InsightBundle, boolean>
   identities: IdentitySummary[]
   identitiesLoading: boolean
   ownerId?: number
@@ -66,19 +67,23 @@ interface DashboardViewProps {
 const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0, signDisplay: 'exceptZero' })
 
 export function DashboardView({
-  snapshot, sync, insights, insightsLoading, identities, identitiesLoading, ownerId, repositoryId, actorKind, excludeDead, dateFrom, dateTo,
+  snapshot, sync, insights, insightsLoading, insightsRefreshing, identities, identitiesLoading, ownerId, repositoryId, actorKind, excludeDead, dateFrom, dateTo,
   sessionHours, adoptionDays, survivalDays, rankCohort, rankMetric,
   onOwnerChange, onRepositoryChange, onActorKindChange, onDateRangeChange, onWindowsChange, onRankChange,
   onIdentityChange, onRefresh, onSettings,
 }: DashboardViewProps) {
   const [selectedIdentity, setSelectedIdentity] = useState<string>()
   const [view, setView] = useState<'dashboard' | 'identities'>('dashboard')
+  const classifyIdentity = useCallback((key: string, kind: ActorKind) => onIdentityChange(key, { kind }), [onIdentityChange])
+  const renameIdentity = useCallback((key: string, display_name: string) => onIdentityChange(key, { display_name }), [onIdentityChange])
+  const mergeIdentity = useCallback((key: string, canonical_key: string) => onIdentityChange(key, { canonical_key }), [onIdentityChange])
+  const unmergeIdentity = useCallback((key: string) => onIdentityChange(key, { unmerge: true }), [onIdentityChange])
   const unknownIdentities = identities.filter((identity) => identity.kind === 'unknown').length
   const registryRequired = identitiesLoading || unknownIdentities > 0
   const activeView = registryRequired ? 'identities' : view
   const repositories = snapshot.repositories.filter((repo) => (!ownerId || repo.owner.id === ownerId) && (!excludeDead || !repo.liveness?.is_dead))
-  const meta = insights?.overview.meta
-  const summary = insights?.overview.summary
+  const meta = insights.overview?.meta
+  const summary = insights.overview?.summary
   const coverage = meta?.coverage
   const period = meta?.from && meta.to ? `${meta.from} → ${meta.to}` : 'All available history'
   const attribution = `${coverage?.unknown_commits ?? 0} unknown`
@@ -126,22 +131,22 @@ export function DashboardView({
 
       {excludeDead && repositories.length === 0 && <p className="mt-6 rounded-2xl border border-dashed border-white/10 py-10 text-center text-sm text-slate-500">All repositories are excluded by project settings.</p>}
 
-      <section aria-label="Human and agent signals" className="report-summary mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{cards.map(({label,value,detail,icon:Icon,tone}) => <article key={label} className="report-metric metric-card rounded-2xl border border-white/8 bg-slate-900/60 p-5"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs font-medium uppercase tracking-wider text-slate-500">{label}</p><p className="mt-2 truncate text-2xl font-semibold tracking-tight text-white">{insightsLoading ? '…' : value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div><span className={`rounded-xl bg-white/[0.04] p-2.5 ring-1 ring-white/8 ${tone}`}><Icon className="size-5" /></span></div></article>)}</section>
+      <section aria-label="Human and agent signals" aria-busy={insightsRefreshing.overview} className="report-summary mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{cards.map(({label,value,detail,icon:Icon,tone}) => <article key={label} className="report-metric metric-card rounded-2xl border border-white/8 bg-slate-900/60 p-5"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs font-medium uppercase tracking-wider text-slate-500">{label}</p><p className="mt-2 truncate text-2xl font-semibold tracking-tight text-white">{insightsLoading.overview ? '…' : value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div><span className={`rounded-xl bg-white/[0.04] p-2.5 ring-1 ring-white/8 ${tone}`}><Icon className="size-5" /></span></div></article>)}</section>
 
-      <GraphSection eyebrow="Relationships" title="Team constellation" description="Who works with whom, based on co-authorship, reviews, and short same-repository commit handoffs." icon={<Network className="size-4" />}>
-        <TeamNetwork network={insights?.network ?? null} loading={insightsLoading} selectedKey={selectedIdentity} onSelect={setSelectedIdentity} onClassify={(key,kind) => onIdentityChange(key,{kind})} onRename={(key,display_name) => onIdentityChange(key,{display_name})} onMerge={(key,canonical_key) => onIdentityChange(key,{canonical_key})} onUnmerge={(key) => onIdentityChange(key,{unmerge:true})} />
+      <GraphSection eyebrow="Relationships" title="Team constellation" description="Who works with whom, based on co-authorship, reviews, and short same-repository commit handoffs." icon={<Network className="size-4" />} updating={!insightsLoading.network && insightsRefreshing.network}>
+        <TeamNetwork network={insights.network} loading={insightsLoading.network} selectedKey={selectedIdentity} onSelect={setSelectedIdentity} onClassify={classifyIdentity} onRename={renameIdentity} onMerge={mergeIdentity} onUnmerge={unmergeIdentity} />
       </GraphSection>
 
-      <GraphSection eyebrow="Frequency + quality" title="Momentum over time" description="Activity mix and quality proxies share the same time brush, without combining unlike measures on one axis." icon={<Activity className="size-4" />}>
-        <MomentumChart overview={insights?.overview ?? null} loading={insightsLoading} />
+      <GraphSection eyebrow="Frequency + quality" title="Momentum over time" description="Activity mix and quality proxies share the same time brush, without combining unlike measures on one axis." icon={<Activity className="size-4" />} updating={!insightsLoading.overview && insightsRefreshing.overview}>
+        <MomentumChart overview={insights.overview} loading={insightsLoading.overview} />
       </GraphSection>
 
-      <GraphSection eyebrow="Observed association" title="Human → agent ramp-up" description={`Compare ${sessionHours}-hour handoffs and ${adoptionDays}-day repository adoption windows.`} icon={<GitBranch className="size-4" />}>
-        <RampChart ramps={insights?.ramps ?? null} loading={insightsLoading} />
+      <GraphSection eyebrow="Observed association" title="Human → agent ramp-up" description={`Compare ${sessionHours}-hour handoffs and ${adoptionDays}-day repository adoption windows.`} icon={<GitBranch className="size-4" />} updating={!insightsLoading.ramps && insightsRefreshing.ramps}>
+        <RampChart ramps={insights.ramps} loading={insightsLoading.ramps} />
       </GraphSection>
 
-      <GraphSection eyebrow="Transparent ranking" title="Who leads this period?" description="Rank one measured outcome at a time—never an opaque productivity score." icon={<TrendingUp className="size-4" />} actions={<RankControls cohort={rankCohort} metric={rankMetric} onChange={onRankChange} />}>
-        <RankChart rankings={insights?.rankings ?? null} loading={insightsLoading} />
+      <GraphSection eyebrow="Transparent ranking" title="Who leads this period?" description="Rank one measured outcome at a time—never an opaque productivity score." icon={<TrendingUp className="size-4" />} actions={<RankControls cohort={rankCohort} metric={rankMetric} onChange={onRankChange} />} updating={!insightsLoading.rankings && insightsRefreshing.rankings}>
+        <RankChart rankings={insights.rankings} loading={insightsLoading.rankings} />
       </GraphSection>
 
       <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/8 pt-5 text-xs text-slate-600"><p>{coverage?.unknown_commits ?? 0} commits remain unknown · classifications are evidence-based and editable.</p><p>Observed associations are not causal claims.</p></footer>
@@ -150,12 +155,12 @@ export function DashboardView({
   )
 }
 
-function GraphSection({ eyebrow, title, description, icon, actions, children }: { eyebrow:string;title:string;description:string;icon:React.ReactNode;actions?:React.ReactNode;children:React.ReactNode }) { return <section className="report-activity mt-7 rounded-3xl border border-white/8 bg-slate-900/55 p-4 shadow-2xl shadow-black/10 sm:p-6"><div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-cyan-300">{icon}{eyebrow}</div><h2 className="mt-2 text-xl font-semibold text-white">{title}</h2><p className="mt-1 max-w-3xl text-sm text-slate-500">{description}</p></div>{actions}</div>{children}</section> }
+function GraphSection({ eyebrow, title, description, icon, actions, updating = false, children }: { eyebrow:string;title:string;description:string;icon:React.ReactNode;actions?:React.ReactNode;updating?:boolean;children:React.ReactNode }) { return <section aria-busy={updating} className="report-activity relative mt-7 rounded-3xl border border-white/8 bg-slate-900/55 p-4 shadow-2xl shadow-black/10 sm:p-6"><div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-cyan-300">{icon}{eyebrow}</div><h2 className="mt-2 text-xl font-semibold text-white">{title}</h2><p className="mt-1 max-w-3xl text-sm text-slate-500">{description}</p></div><div className="flex flex-wrap items-center gap-3">{updating && <span role="status" className="inline-flex items-center gap-1.5 text-xs text-cyan-200/70"><RefreshCw aria-hidden="true" className="size-3.5 animate-spin" /> Updating</span>}{actions}</div></div>{children}</section> }
 
 function RankControls({ cohort, metric, onChange }: { cohort:RankCohort;metric:RankMetric;onChange:(cohort:RankCohort,metric:RankMetric)=>void }) {
   const pair = cohort === 'human_agent' || cohort === 'human_human'
   const metrics: [RankMetric,string][] = pair ? [['interaction_days','Interaction days'],['handoffs','Handoffs'],['review_interactions','Reviews']] : [['commits','Commits'],['pull_requests','Pull requests'],['retained_line_rate','Retained lines'],['revert_rate','Revert rate']]
-  return <div className="no-print flex flex-wrap gap-2"><select value={cohort} onChange={(event) => { const next=event.target.value as RankCohort;onChange(next,next==='humans'||next==='agents'?'commits':'interaction_days') }} className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200"><option value="agents">Agents</option><option value="humans">Humans</option><option value="human_agent">Human + Agent</option><option value="human_human">Human + Human</option></select><select value={metric} onChange={(event) => onChange(cohort,event.target.value as RankMetric)} className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{metrics.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+  return <div className="no-print flex flex-wrap gap-2"><select aria-label="Ranking cohort" value={cohort} onChange={(event) => { const next=event.target.value as RankCohort;onChange(next,next==='humans'||next==='agents'?'commits':'interaction_days') }} className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200"><option value="agents">Agents</option><option value="humans">Humans</option><option value="human_agent">Human + Agent</option><option value="human_human">Human + Human</option></select><select aria-label="Ranking metric" value={metric} onChange={(event) => onChange(cohort,event.target.value as RankMetric)} className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{metrics.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></div>
 }
 
 function WindowInput({label,min,max,value,onChange}:{label:string;min:number;max:number;value:number;onChange:(value:number)=>void}) { return <label className="text-xs text-slate-500">{label}<input type="number" min={min} max={max} value={value} onChange={(event)=>onChange(Math.min(max,Math.max(min,Number(event.target.value))))} className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-200" /></label> }

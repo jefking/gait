@@ -1,17 +1,17 @@
 import { extent, scaleLinear } from 'd3'
 import { ArrowRight, Bot, GitBranch } from 'lucide-react'
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import type { RampResponse } from '../lib/api'
 
 interface RampChartProps { ramps: RampResponse | null; loading: boolean }
 
 const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0, signDisplay: 'exceptZero' })
 
-export function RampChart({ ramps, loading }: RampChartProps) {
+export const RampChart = memo(function RampChart({ ramps, loading }: RampChartProps) {
   if (loading) return <div className="h-[440px] animate-pulse rounded-2xl bg-white/[0.03]" aria-label="Loading observed lift" />
   if (!ramps || ramps.handoffs.length === 0 && ramps.adoptions.length === 0) return <Empty />
   return <div>{ramps.handoffs.length > 0 ? <HandoffScatter ramps={ramps} /> : <EmptyHandoffs />}<AdoptionList ramps={ramps} /></div>
-}
+})
 
 function HandoffScatter({ ramps }: { ramps: RampResponse }) {
   const chart = useMemo(() => {

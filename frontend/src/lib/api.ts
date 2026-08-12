@@ -478,17 +478,37 @@ export async function getInsights(
   metric: RankMetric,
   signal?: AbortSignal,
 ): Promise<InsightBundle> {
-  const base = insightQuery(filters)
-  const ranking = new URLSearchParams(base)
-  ranking.set('cohort', cohort)
-  ranking.set('metric', metric)
   const [overview, network, ramps, rankings] = await Promise.all([
-    requestJSON<OverviewResponse>(`/api/insights/overview?${base}`, { signal }),
-    requestJSON<NetworkResponse>(`/api/insights/network?${base}`, { signal }),
-    requestJSON<RampResponse>(`/api/insights/ramps?${base}`, { signal }),
-    requestJSON<RankingResponse>(`/api/insights/rankings?${ranking}`, { signal }),
+    getInsightOverview(filters, signal),
+    getInsightNetwork(filters, signal),
+    getInsightRamps(filters, signal),
+    getInsightRankings(filters, cohort, metric, signal),
   ])
   return { overview, network, ramps, rankings }
+}
+
+export function getInsightOverview(filters: InsightFilters, signal?: AbortSignal): Promise<OverviewResponse> {
+  return requestJSON<OverviewResponse>(`/api/insights/overview?${insightQuery(filters)}`, { signal })
+}
+
+export function getInsightNetwork(filters: InsightFilters, signal?: AbortSignal): Promise<NetworkResponse> {
+  return requestJSON<NetworkResponse>(`/api/insights/network?${insightQuery(filters)}`, { signal })
+}
+
+export function getInsightRamps(filters: InsightFilters, signal?: AbortSignal): Promise<RampResponse> {
+  return requestJSON<RampResponse>(`/api/insights/ramps?${insightQuery(filters)}`, { signal })
+}
+
+export function getInsightRankings(
+  filters: InsightFilters,
+  cohort: RankCohort,
+  metric: RankMetric,
+  signal?: AbortSignal,
+): Promise<RankingResponse> {
+  const query = insightQuery(filters)
+  query.set('cohort', cohort)
+  query.set('metric', metric)
+  return requestJSON<RankingResponse>(`/api/insights/rankings?${query}`, { signal })
 }
 
 export function getIdentities(signal?: AbortSignal): Promise<{ identities: IdentitySummary[] }> {

@@ -5,18 +5,29 @@ import { TokenModal } from './components/TokenModal'
 import {
   getDashboard,
   getIdentities,
-  getInsights,
+  getInsightNetwork,
+  getInsightOverview,
+  getInsightRamps,
+  getInsightRankings,
   isSyncActive,
   startSync,
   subscribeToDashboardEvents,
   type DashboardResponse,
   type ActorKind,
-  type InsightBundle,
   type IdentitySummary,
+  type NetworkResponse,
+  type OverviewResponse,
   type RankCohort,
   type RankMetric,
+  type RankingResponse,
+  type RampResponse,
   updateIdentity as updateIdentityClassification,
 } from './lib/api'
+
+interface KeyedResult<T> {
+  key: string
+  data: T
+}
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
@@ -37,10 +48,10 @@ function App() {
   const [rankMetric, setRankMetric] = useState<RankMetric>('commits')
   const [insightEpoch, setInsightEpoch] = useState(0)
   const [identityResult, setIdentityResult] = useState<{ key: string; data: IdentitySummary[] }>()
-  const [insightResult, setInsightResult] = useState<{
-    key: string
-    data: InsightBundle
-  }>()
+  const [overviewResult, setOverviewResult] = useState<KeyedResult<OverviewResponse>>()
+  const [networkResult, setNetworkResult] = useState<KeyedResult<NetworkResponse>>()
+  const [rampResult, setRampResult] = useState<KeyedResult<RampResponse>>()
+  const [rankingResult, setRankingResult] = useState<KeyedResult<RankingResponse>>()
 
   const applyDashboard = useCallback((response: DashboardResponse) => {
     setDashboard(response)
@@ -77,8 +88,9 @@ function App() {
   const selectedTo = dateRange?.userSelected ? dateRange.to : undefined
   const identitiesClassified = !identitiesLoading && identities.every((identity) => identity.kind !== 'unknown')
   const insightRequestKey = dashboard?.snapshot && identitiesClassified
-    ? [dashboard.snapshot.generated_at, insightEpoch, ownerId ?? '', repositoryId ?? '', actorKind ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? '', windows.sessionHours, windows.adoptionDays, windows.survivalDays, rankCohort, rankMetric].join(':')
+    ? [dashboard.snapshot.generated_at, insightEpoch, ownerId ?? '', repositoryId ?? '', actorKind ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? '', windows.sessionHours, windows.adoptionDays, windows.survivalDays].join(':')
     : ''
+  const rankingRequestKey = insightRequestKey ? `${insightRequestKey}:${rankCohort}:${rankMetric}` : ''
 
   useEffect(() => {
     let cancelled = false
@@ -131,25 +143,27 @@ function App() {
   useEffect(() => {
     if (!insightRequestKey) return
     const controller = new AbortController()
-    getInsights(
-      { ownerId, repositoryId, actorKind, excludeDead, from: selectedFrom, to: selectedTo, ...windows },
-      rankCohort,
-      rankMetric,
-      controller.signal,
-    )
-      .then((data) => {
-        setInsightResult({ key: insightRequestKey, data })
-        if (data.overview.meta.available_from && data.overview.meta.available_to) {
+    const filters = { ownerId, repositoryId, actorKind, excludeDead, from: selectedFrom, to: selectedTo, ...windows }
+    Promise.all([
+      getInsightOverview(filters, controller.signal),
+      getInsightNetwork(filters, controller.signal),
+      getInsightRamps(filters, controller.signal),
+    ])
+      .then(([overview, network, ramps]) => {
+        setOverviewResult({ key: insightRequestKey, data: overview })
+        setNetworkResult({ key: insightRequestKey, data: network })
+        setRampResult({ key: insightRequestKey, data: ramps })
+        if (overview.meta.available_from && overview.meta.available_to) {
           setDateRange((current) =>
             current?.userSelected
               ? {
-                  from: data.overview.meta.from ?? current.from,
-                  to: data.overview.meta.to ?? current.to,
+                  from: overview.meta.from ?? current.from,
+                  to: overview.meta.to ?? current.to,
                   userSelected: true,
                 }
               : {
-                  from: data.overview.meta.available_from!,
-                  to: data.overview.meta.available_to!,
+                  from: overview.meta.available_from!,
+                  to: overview.meta.available_to!,
                   userSelected: false,
                 },
           )
@@ -157,10 +171,27 @@ function App() {
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
+        setOverviewResult((current) => current?.key === insightRequestKey ? current : undefined)
+        setNetworkResult((current) => current?.key === insightRequestKey ? current : undefined)
+        setRampResult((current) => current?.key === insightRequestKey ? current : undefined)
         setDashboardError(error instanceof Error ? error.message : 'Could not load Human × Agent insights.')
       })
     return () => controller.abort()
-  }, [insightRequestKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows, rankCohort, rankMetric])
+  }, [insightRequestKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows])
+
+  useEffect(() => {
+    if (!rankingRequestKey) return
+    const controller = new AbortController()
+    const filters = { ownerId, repositoryId, actorKind, excludeDead, from: selectedFrom, to: selectedTo, ...windows }
+    getInsightRankings(filters, rankCohort, rankMetric, controller.signal)
+      .then((rankings) => setRankingResult({ key: rankingRequestKey, data: rankings }))
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setRankingResult((current) => current?.key === rankingRequestKey ? current : undefined)
+        setDashboardError(error instanceof Error ? error.message : 'Could not load rankings.')
+      })
+    return () => controller.abort()
+  }, [rankingRequestKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows, rankCohort, rankMetric])
 
   useEffect(() => {
     if (!snapshotGeneratedAt) return
@@ -198,6 +229,30 @@ function App() {
     }
   }
 
+  const changeActorKind = useCallback((kind?: ActorKind) => {
+    setActorKind(kind)
+    if (kind === 'human') { setRankCohort('humans'); setRankMetric('commits') }
+    if (kind === 'agent') { setRankCohort('agents'); setRankMetric('commits') }
+  }, [])
+
+  const changeDateRange = useCallback((from: string, to: string) => {
+    setDateRange({ from, to, userSelected: true })
+  }, [])
+
+  const changeRanking = useCallback((cohort: RankCohort, metric: RankMetric) => {
+    setRankCohort(cohort)
+    setRankMetric(metric)
+  }, [])
+
+  const changeIdentity = useCallback((key: string, update: { kind?: ActorKind; display_name?: string; canonical_key?: string; unmerge?: boolean }) => {
+    void updateIdentityClassification(key, update)
+      .then((result) => {
+        setIdentityResult({ key: snapshotGeneratedAt ?? '', data: result.identities })
+        setInsightEpoch((current) => current + 1)
+      })
+      .catch((error: unknown) => setDashboardError(error instanceof Error ? error.message : 'Could not update identity.'))
+  }, [snapshotGeneratedAt])
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <div className="page-glow" aria-hidden="true" />
@@ -205,8 +260,24 @@ function App() {
         <DashboardView
           snapshot={dashboard.snapshot}
           sync={dashboard.sync}
-          insights={insightResult?.data ?? null}
-          insightsLoading={insightResult?.key !== insightRequestKey}
+          insights={{
+            overview: overviewResult?.data ?? null,
+            network: networkResult?.data ?? null,
+            ramps: rampResult?.data ?? null,
+            rankings: rankingResult?.data ?? null,
+          }}
+          insightsLoading={{
+            overview: !overviewResult,
+            network: !networkResult,
+            ramps: !rampResult,
+            rankings: !rankingResult,
+          }}
+          insightsRefreshing={{
+            overview: Boolean(insightRequestKey) && overviewResult?.key !== insightRequestKey,
+            network: Boolean(insightRequestKey) && networkResult?.key !== insightRequestKey,
+            ramps: Boolean(insightRequestKey) && rampResult?.key !== insightRequestKey,
+            rankings: Boolean(rankingRequestKey) && rankingResult?.key !== rankingRequestKey,
+          }}
           identities={identities}
           identitiesLoading={identitiesLoading}
           ownerId={ownerId}
@@ -222,19 +293,11 @@ function App() {
           rankMetric={rankMetric}
           onOwnerChange={setOwnerId}
           onRepositoryChange={setRepositoryId}
-          onActorKindChange={(kind) => {
-            setActorKind(kind)
-            if (kind === 'human') { setRankCohort('humans'); setRankMetric('commits') }
-            if (kind === 'agent') { setRankCohort('agents'); setRankMetric('commits') }
-          }}
-          onDateRangeChange={(from, to) => setDateRange({ from, to, userSelected: true })}
+          onActorKindChange={changeActorKind}
+          onDateRangeChange={changeDateRange}
           onWindowsChange={setWindows}
-          onRankChange={(cohort, metric) => { setRankCohort(cohort); setRankMetric(metric) }}
-          onIdentityChange={(key, update) => {
-            void updateIdentityClassification(key, update)
-              .then((result) => { setIdentityResult({ key: snapshotGeneratedAt ?? '', data: result.identities }); setInsightEpoch((current) => current + 1) })
-              .catch((error: unknown) => setDashboardError(error instanceof Error ? error.message : 'Could not update identity.'))
-          }}
+          onRankChange={changeRanking}
+          onIdentityChange={changeIdentity}
           onRefresh={() => void refresh()}
           onSettings={() => {
             setModalError(undefined)

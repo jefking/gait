@@ -1,16 +1,16 @@
 import { line, scaleLinear, scaleOrdinal, scalePoint, schemeTableau10 } from 'd3'
 import { Trophy } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { RankingResponse } from '../lib/api'
 
 interface RankChartProps { rankings: RankingResponse | null; loading: boolean }
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 
-export function RankChart({ rankings, loading }: RankChartProps) {
+export const RankChart = memo(function RankChart({ rankings, loading }: RankChartProps) {
   if (loading) return <div className="h-[430px] animate-pulse rounded-2xl bg-white/[0.03]" aria-label="Loading rank trajectories" />
   if (!rankings || rankings.leaderboard.length === 0) return <Empty />
   return <div className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,1fr)_320px]"><BumpChart rankings={rankings} /><Leaderboard rankings={rankings} /></div>
-}
+})
 
 function BumpChart({ rankings }: { rankings: RankingResponse }) {
   const plotRef = useRef<HTMLDivElement>(null)

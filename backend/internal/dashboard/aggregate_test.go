@@ -9,29 +9,46 @@ import (
 func TestParseCommitCSVAndContributorIdentity(t *testing.T) {
 	csvData := strings.Join([]string{
 		strings.Join(commitCSVHeader, ","),
-		"2024-01-02T03:04:05Z,2024-01-02,abc,octocat,The Octocat,first,2,10,3,13",
-		"2024-02-03T04:05:06Z,2024-02-03,def,,Local Developer,second,1,4,2,6",
+		"2024-01-02T03:04:05Z,2024-01-02,abc,1208574+octocat@users.noreply.github.com,octocat,The Octocat,first,2,10,3,13",
+		"2024-02-03T04:05:06Z,2024-02-03,def,local@example.com,,Local Developer,second,1,4,2,6",
+		"2024-03-04T05:06:07Z,2024-03-04,ghi,LOCAL@example.com,,Local Dev,third,1,2,1,3",
 	}, "\n")
 
 	stats, err := ParseCommitCSV(strings.NewReader(csvData))
 	if err != nil {
 		t.Fatalf("parse commit CSV: %v", err)
 	}
-	if stats.Commits != 2 || stats.FilesChanged != 3 || stats.LinesAdded != 14 || stats.LinesDeleted != 5 {
+	if stats.Commits != 3 || stats.FilesChanged != 4 || stats.LinesAdded != 16 || stats.LinesDeleted != 6 {
 		t.Fatalf("unexpected totals: %+v", stats)
 	}
 	github := stats.Contributors["github:octocat"]
 	if github.Login != "octocat" || github.Name != "The Octocat" || !strings.Contains(github.AvatarURL, "octocat") {
 		t.Fatalf("unexpected GitHub contributor: %+v", github)
 	}
-	if _, ok := stats.Contributors["git:local developer"]; !ok {
-		t.Fatalf("expected fallback Git display-name identity, got %#v", stats.Contributors)
+	email := stats.Contributors["email:local@example.com"]
+	if email.Commits != 2 || email.Name != "Local Developer" {
+		t.Fatalf("expected stable, aggregated email identity, got %#v", email)
 	}
-	if stats.Daily["2024-01-02"]["github:octocat"] != 1 || stats.Daily["2024-02-03"]["git:local developer"] != 1 {
+	if stats.Daily["2024-01-02"]["github:octocat"] != 1 || stats.Daily["2024-02-03"]["email:local@example.com"] != 1 || stats.Daily["2024-03-04"]["email:local@example.com"] != 1 {
 		t.Fatalf("unexpected daily activity: %#v", stats.Daily)
 	}
-	if stats.FirstAt.Format(time.DateOnly) != "2024-01-02" || stats.LastAt.Format(time.DateOnly) != "2024-02-03" {
+	if stats.FirstAt.Format(time.DateOnly) != "2024-01-02" || stats.LastAt.Format(time.DateOnly) != "2024-03-04" {
 		t.Fatalf("unexpected commit activity bounds: %s to %s", stats.FirstAt, stats.LastAt)
+	}
+}
+
+func TestParseCommitCSVSupportsLegacyCachedReports(t *testing.T) {
+	csvData := strings.Join([]string{
+		strings.Join(legacyCommitCSVHeader, ","),
+		"2024-01-02T03:04:05Z,2024-01-02,abc,,Local Developer,first,2,10,3,13",
+	}, "\n")
+
+	stats, err := ParseCommitCSV(strings.NewReader(csvData))
+	if err != nil {
+		t.Fatalf("parse legacy commit CSV: %v", err)
+	}
+	if _, ok := stats.Contributors["git:local developer"]; !ok {
+		t.Fatalf("expected legacy display-name identity, got %#v", stats.Contributors)
 	}
 }
 
