@@ -144,19 +144,32 @@ const (
 	ActivityPullRequests ActivityMetric = "pull_requests"
 )
 
+type ActivityGranularity string
+
+const (
+	ActivityByDay   ActivityGranularity = "day"
+	ActivityByWeek  ActivityGranularity = "week"
+	ActivityByMonth ActivityGranularity = "month"
+)
+
 type ActivityQuery struct {
 	Group        ActivityGroup
 	Metric       ActivityMetric
 	OwnerID      int64
 	RepositoryID int64
+	From         *time.Time
+	To           *time.Time
 }
 
 type ActivityResponse struct {
-	Group  ActivityGroup    `json:"group_by"`
-	Metric ActivityMetric   `json:"metric"`
-	From   string           `json:"from,omitempty"`
-	To     string           `json:"to,omitempty"`
-	Series []ActivitySeries `json:"series"`
+	Group         ActivityGroup       `json:"group_by"`
+	Metric        ActivityMetric      `json:"metric"`
+	Granularity   ActivityGranularity `json:"granularity,omitempty"`
+	AvailableFrom string              `json:"available_from,omitempty"`
+	AvailableTo   string              `json:"available_to,omitempty"`
+	From          string              `json:"from,omitempty"`
+	To            string              `json:"to,omitempty"`
+	Series        []ActivitySeries    `json:"series"`
 }
 
 type ActivitySeries struct {
@@ -168,7 +181,7 @@ type ActivitySeries struct {
 }
 
 type ActivityPoint struct {
-	Month string `json:"month"`
+	Date  string `json:"date"`
 	Value int    `json:"value"`
 }
 
@@ -229,14 +242,14 @@ type CommitStats struct {
 	LinesDeleted int
 	LastAt       time.Time
 	Contributors map[string]ContributorMetrics
-	Monthly      map[string]map[string]int
+	Daily        map[string]map[string]int
 }
 
 type PullStats struct {
 	Totals       PullRequestTotals
 	LastAt       time.Time
 	Contributors map[string]ContributorMetrics
-	Monthly      map[string]map[string]int
+	Daily        map[string]map[string]int
 }
 
 type RepositoryReport struct {

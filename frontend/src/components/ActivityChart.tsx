@@ -11,14 +11,15 @@ import {
 } from 'd3'
 import { Eye, EyeOff, LineChart as LineChartIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { ActivityResponse } from '../lib/api'
+import type { ActivityGranularity, ActivityResponse } from '../lib/api'
 
 interface ActivityChartProps {
   activity: ActivityResponse | null
   loading: boolean
 }
 
-const parseMonth = utcParse('%Y-%m')
+const parseDate = utcParse('%Y-%m-%d')
+const formatDay = utcFormat('%b %-d')
 const formatMonth = utcFormat('%b %Y')
 const compactNumber = new Intl.NumberFormat(undefined, { notation: 'compact' })
 
@@ -40,7 +41,7 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
     const visible = (activity?.series ?? []).filter((series) => !hidden.has(series.key))
     const datedPoints = visible.flatMap((series) =>
       series.points.flatMap((point) => {
-        const date = parseMonth(point.month)
+        const date = parseDate(point.date)
         return date ? [{ date, value: point.value }] : []
       }),
     )
@@ -140,9 +141,9 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
           role="img"
           aria-labelledby="activity-chart-title activity-chart-description"
         >
-          <title id="activity-chart-title">Monthly repository activity</title>
+          <title id="activity-chart-title">Repository activity over time</title>
           <desc id="activity-chart-description">
-            {activity.metric === 'commits' ? 'Commits' : 'Pull requests opened'} grouped by {activity.group_by}.
+            {activity.metric === 'commits' ? 'Commits' : 'Pull requests opened'} grouped by {activity.group_by} in {activity.granularity ?? 'monthly'} intervals.
           </desc>
           {chart.yTicks.map((tick) => (
             <g key={tick}>
@@ -167,12 +168,12 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
               fill="#64748b"
               fontSize="11"
             >
-              {formatMonth(tick)}
+              {formatActivityTick(tick, activity.granularity)}
             </text>
           ))}
           {chart.visible.map((series) => {
             const points = series.points.flatMap((point) => {
-              const date = parseMonth(point.month)
+              const date = parseDate(point.date)
               return date ? [{ date, value: point.value }] : []
             })
             return (
@@ -204,4 +205,8 @@ export function ActivityChart({ activity, loading }: ActivityChartProps) {
       </div>
     </div>
   )
+}
+
+function formatActivityTick(date: Date, granularity?: ActivityGranularity) {
+  return granularity === 'month' ? formatMonth(date) : formatDay(date)
 }

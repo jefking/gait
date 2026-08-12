@@ -107,6 +107,9 @@ func (manager *Manager) Activity(query ActivityQuery) (ActivityResponse, error) 
 	if query.Metric != ActivityCommits && query.Metric != ActivityPullRequests {
 		return ActivityResponse{}, errors.New("metric must be commits or pull_requests")
 	}
+	if query.From != nil && query.To != nil && query.From.After(*query.To) {
+		return ActivityResponse{}, errors.New("from must be on or before to")
+	}
 	manager.mu.RLock()
 	reports := make(map[int64]RepositoryReport, len(manager.reports))
 	for id, report := range manager.reports {

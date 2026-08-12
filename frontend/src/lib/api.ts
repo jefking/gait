@@ -121,9 +121,10 @@ export interface DashboardResponse {
 
 export type ActivityGroup = 'owner' | 'contributor'
 export type ActivityMetric = 'commits' | 'pull_requests'
+export type ActivityGranularity = 'day' | 'week' | 'month'
 
 export interface ActivityPoint {
-  month: string
+  date: string
   value: number
 }
 
@@ -138,6 +139,9 @@ export interface ActivitySeries {
 export interface ActivityResponse {
   group_by: ActivityGroup
   metric: ActivityMetric
+  granularity?: ActivityGranularity
+  available_from?: string
+  available_to?: string
   from?: string
   to?: string
   series: ActivitySeries[]
@@ -148,6 +152,8 @@ export interface ActivityOptions {
   metric: ActivityMetric
   ownerId?: number
   repositoryId?: number
+  from?: string
+  to?: string
 }
 
 export class APIError extends Error {
@@ -201,6 +207,8 @@ export function getActivity(
   if (options.repositoryId) {
     query.set('repository_id', String(options.repositoryId))
   }
+  if (options.from) query.set('from', options.from)
+  if (options.to) query.set('to', options.to)
   return requestJSON<ActivityResponse>(`/api/activity?${query}`, { signal })
 }
 

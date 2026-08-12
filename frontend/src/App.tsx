@@ -25,6 +25,7 @@ function App() {
   const [metric, setMetric] = useState<ActivityMetric>('commits')
   const [ownerId, setOwnerId] = useState<number>()
   const [repositoryId, setRepositoryId] = useState<number>()
+  const [dateRange, setDateRange] = useState<{ from: string; to: string }>()
   const [activityResult, setActivityResult] = useState<{
     key: string
     data: ActivityResponse
@@ -49,7 +50,7 @@ function App() {
 
   const syncActive = dashboard ? isSyncActive(dashboard.sync) : false
   const activityRequestKey = dashboard?.snapshot && !syncActive
-    ? [dashboard.snapshot.generated_at, groupBy, metric, ownerId ?? '', repositoryId ?? ''].join(':')
+    ? [dashboard.snapshot.generated_at, groupBy, metric, ownerId ?? '', repositoryId ?? '', dateRange?.from ?? '', dateRange?.to ?? ''].join(':')
     : ''
 
   useEffect(() => {
@@ -81,16 +82,25 @@ function App() {
     if (!activityRequestKey) return
     const controller = new AbortController()
     getActivity(
-      { groupBy, metric, ownerId, repositoryId },
+      { groupBy, metric, ownerId, repositoryId, from: dateRange?.from, to: dateRange?.to },
       controller.signal,
     )
-      .then((data) => setActivityResult({ key: activityRequestKey, data }))
+      .then((data) => {
+        setActivityResult({ key: activityRequestKey, data })
+        if (data.from && data.to) {
+          setDateRange((current) =>
+            current?.from === data.from && current?.to === data.to
+              ? current
+              : { from: data.from!, to: data.to! },
+          )
+        }
+      })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
         setDashboardError(error instanceof Error ? error.message : 'Could not load activity history.')
       })
     return () => controller.abort()
-  }, [activityRequestKey, groupBy, metric, ownerId, repositoryId])
+  }, [activityRequestKey, groupBy, metric, ownerId, repositoryId, dateRange?.from, dateRange?.to])
 
   const connect = async (pat: string) => {
     setSubmitting(true)
@@ -120,10 +130,13 @@ function App() {
           metric={metric}
           ownerId={ownerId}
           repositoryId={repositoryId}
+          dateFrom={dateRange?.from}
+          dateTo={dateRange?.to}
           onGroupByChange={setGroupBy}
           onMetricChange={setMetric}
           onOwnerChange={setOwnerId}
           onRepositoryChange={setRepositoryId}
+          onDateRangeChange={(from, to) => setDateRange({ from, to })}
           onRefresh={() => {
             setModalError(undefined)
             setModalOpen(true)

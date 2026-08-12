@@ -9,8 +9,15 @@ describe('API client', () => {
       new Response(JSON.stringify({ group_by: 'contributor', metric: 'pull_requests', series: [] }), { status: 200 }),
     )
     vi.stubGlobal('fetch', fetchMock)
-    await getActivity({ groupBy: 'contributor', metric: 'pull_requests', ownerId: 7, repositoryId: 9 })
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/activity?group_by=contributor&metric=pull_requests&owner_id=7&repository_id=9')
+    await getActivity({
+      groupBy: 'contributor',
+      metric: 'pull_requests',
+      ownerId: 7,
+      repositoryId: 9,
+      from: '2024-01-02',
+      to: '2024-03-04',
+    })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/activity?group_by=contributor&metric=pull_requests&owner_id=7&repository_id=9&from=2024-01-02&to=2024-03-04')
   })
 
   it('sends a PAT in the one sync request body', async () => {

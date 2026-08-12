@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/jefking/gait/backend/internal/dashboard"
 )
@@ -63,14 +64,26 @@ func TestStartSyncAPIRejectsConcurrentJob(t *testing.T) {
 
 func TestActivityAPIParsesFilters(t *testing.T) {
 	service := &fakeDashboardService{}
-	request := httptest.NewRequest(http.MethodGet, "/api/activity?group_by=contributor&metric=pull_requests&owner_id=7&repository_id=9", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/activity?group_by=contributor&metric=pull_requests&owner_id=7&repository_id=9&from=2024-01-02&to=2024-03-04", nil)
 	response := httptest.NewRecorder()
 	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected OK, got %d: %s", response.Code, response.Body.String())
 	}
-	if service.query != (dashboard.ActivityQuery{Group: dashboard.ActivityByContributor, Metric: dashboard.ActivityPullRequests, OwnerID: 7, RepositoryID: 9}) {
+	if service.query.Group != dashboard.ActivityByContributor || service.query.Metric != dashboard.ActivityPullRequests ||
+		service.query.OwnerID != 7 || service.query.RepositoryID != 9 || service.query.From == nil || service.query.To == nil ||
+		service.query.From.Format(time.DateOnly) != "2024-01-02" || service.query.To.Format(time.DateOnly) != "2024-03-04" {
 		t.Fatalf("unexpected activity query: %+v", service.query)
+	}
+}
+
+func TestActivityAPIRejectsInvalidDate(t *testing.T) {
+	service := &fakeDashboardService{}
+	request := httptest.NewRequest(http.MethodGet, "/api/activity?from=01-02-2024", nil)
+	response := httptest.NewRecorder()
+	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request, got %d: %s", response.Code, response.Body.String())
 	}
 }
 

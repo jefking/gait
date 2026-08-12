@@ -6,16 +6,19 @@ import { ActivityChart } from './ActivityChart'
 const activity: ActivityResponse = {
   group_by: 'owner',
   metric: 'commits',
-  from: '2024-01',
-  to: '2024-02',
+  granularity: 'month',
+  available_from: '2024-01-01',
+  available_to: '2024-02-01',
+  from: '2024-01-01',
+  to: '2024-02-01',
   series: [
     {
       key: '1',
       label: 'example-org',
       total: 3,
       points: [
-        { month: '2024-01', value: 1 },
-        { month: '2024-02', value: 2 },
+        { date: '2024-01-01', value: 1 },
+        { date: '2024-02-01', value: 2 },
       ],
     },
   ],
@@ -24,7 +27,7 @@ const activity: ActivityResponse = {
 describe('ActivityChart', () => {
   it('renders an accessible chart and lets a series be hidden', () => {
     render(<ActivityChart activity={activity} loading={false} />)
-    expect(screen.getByRole('img', { name: /Monthly repository activity/ })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: /Repository activity over time/ })).toBeInTheDocument()
     const series = screen.getByRole('button', { name: /example-org/ })
     expect(series).toHaveAttribute('aria-pressed', 'true')
     fireEvent.click(series)

@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Search,
   Users,
+  X,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type {
@@ -26,6 +27,7 @@ import type {
 import { isSyncActive } from '../lib/api'
 import { ActivityChart } from './ActivityChart'
 import { Avatar } from './Avatar'
+import { DateRangeSlider } from './DateRangeSlider'
 
 interface DashboardViewProps {
   snapshot: Snapshot
@@ -36,10 +38,13 @@ interface DashboardViewProps {
   metric: ActivityMetric
   ownerId?: number
   repositoryId?: number
+  dateFrom?: string
+  dateTo?: string
   onGroupByChange: (group: ActivityGroup) => void
   onMetricChange: (metric: ActivityMetric) => void
   onOwnerChange: (id?: number) => void
   onRepositoryChange: (id?: number) => void
+  onDateRangeChange: (from: string, to: string) => void
   onRefresh: () => void
 }
 
@@ -55,10 +60,13 @@ export function DashboardView({
   metric,
   ownerId,
   repositoryId,
+  dateFrom,
+  dateTo,
   onGroupByChange,
   onMetricChange,
   onOwnerChange,
   onRepositoryChange,
+  onDateRangeChange,
   onRefresh,
 }: DashboardViewProps) {
   const [search, setSearch] = useState('')
@@ -125,7 +133,7 @@ export function DashboardView({
         </div>
       </header>
 
-      <SyncBanner sync={sync} />
+      <SyncNotification sync={sync} />
 
       <section aria-label="Repository totals" className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {summaryCards.map(({ label, value, icon: Icon, detail }) => (
@@ -197,6 +205,16 @@ export function DashboardView({
             </label>
           </div>
         </div>
+        {activity?.available_from && activity.available_to && dateFrom && dateTo && (
+          <DateRangeSlider
+            availableFrom={activity.available_from}
+            availableTo={activity.available_to}
+            from={dateFrom}
+            to={dateTo}
+            granularity={activity.granularity}
+            onChange={onDateRangeChange}
+          />
+        )}
         <div className="mt-7">
           <ActivityChart activity={activity} loading={activityLoading} />
         </div>
@@ -267,20 +285,29 @@ export function DashboardView({
   )
 }
 
-function SyncBanner({ sync }: { sync: SyncStatus }) {
-  if (sync.state === 'idle') return null
+export function SyncNotification({ sync }: { sync: SyncStatus }) {
+  const [dismissedFailure, setDismissedFailure] = useState<string>()
   const active = isSyncActive(sync)
+  const failureKey = `${sync.id ?? 'sync'}:${sync.state}`
+
+  // Completed jobs leave the screen clean. Repository-level warnings remain
+  // visible on their corresponding repository rows.
+  if (!active && sync.state !== 'failed') return null
+  if (sync.state === 'failed' && dismissedFailure === failureKey) return null
+
   const progress = sync.total_repositories > 0
     ? Math.round((sync.completed_repositories / sync.total_repositories) * 100)
     : 0
   const tone = sync.state === 'failed'
-    ? 'border-rose-400/20 bg-rose-400/8 text-rose-100'
-    : sync.state === 'complete_with_warnings'
-      ? 'border-amber-300/20 bg-amber-300/8 text-amber-100'
-      : 'border-cyan-300/20 bg-cyan-300/7 text-cyan-100'
+    ? 'border-rose-400/25 bg-slate-900/95 text-rose-100 shadow-rose-950/30'
+    : 'border-cyan-300/25 bg-slate-900/95 text-cyan-100 shadow-cyan-950/30'
 
   return (
-    <aside aria-live="polite" className={`mt-5 overflow-hidden rounded-2xl border ${tone}`}>
+    <aside
+      aria-live="polite"
+      aria-atomic="true"
+      className={`fixed right-4 top-4 z-40 w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl sm:right-6 sm:top-6 ${tone}`}
+    >
       <div className="flex items-start gap-3 px-4 py-3.5">
         <RefreshCw aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${active ? 'animate-spin' : ''}`} />
         <div className="min-w-0 flex-1">
@@ -295,15 +322,17 @@ function SyncBanner({ sync }: { sync: SyncStatus }) {
           {sync.current_repositories && sync.current_repositories.length > 0 && (
             <p className="mt-1 truncate text-xs opacity-65">Updating {sync.current_repositories.join(', ')}</p>
           )}
-          {sync.warnings && sync.warnings.length > 0 && !active && (
-            <details className="mt-2 text-xs opacity-80">
-              <summary className="cursor-pointer">{sync.warnings.length} sync warning{sync.warnings.length === 1 ? '' : 's'}</summary>
-              <ul className="mt-2 space-y-1 pl-4">
-                {sync.warnings.slice(0, 12).map((warning) => <li key={warning} className="list-disc">{warning}</li>)}
-              </ul>
-            </details>
-          )}
         </div>
+        {sync.state === 'failed' && (
+          <button
+            type="button"
+            onClick={() => setDismissedFailure(failureKey)}
+            aria-label="Dismiss sync notification"
+            className="-mr-1 -mt-1 rounded-lg p-1.5 opacity-60 transition hover:bg-white/10 hover:opacity-100"
+          >
+            <X aria-hidden="true" className="size-4" />
+          </button>
+        )}
       </div>
       {active && sync.total_repositories > 0 && (
         <div className="h-0.5 bg-white/5"><div className="h-full bg-cyan-300 transition-[width]" style={{ width: `${progress}%` }} /></div>

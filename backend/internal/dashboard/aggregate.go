@@ -27,7 +27,7 @@ var commitCSVHeader = []string{
 func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 	stats := CommitStats{
 		Contributors: make(map[string]ContributorMetrics),
-		Monthly:      make(map[string]map[string]int),
+		Daily:        make(map[string]map[string]int),
 	}
 	records := csv.NewReader(reader)
 	header, err := records.Read()
@@ -82,11 +82,11 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 		}
 		stats.Contributors[contributor.Key] = contributor
 
-		month := committedAt.UTC().Format("2006-01")
-		if stats.Monthly[month] == nil {
-			stats.Monthly[month] = make(map[string]int)
+		day := committedAt.UTC().Format(time.DateOnly)
+		if stats.Daily[day] == nil {
+			stats.Daily[day] = make(map[string]int)
 		}
-		stats.Monthly[month][contributor.Key]++
+		stats.Daily[day][contributor.Key]++
 		stats.Commits++
 		stats.FilesChanged += filesChanged
 		stats.LinesAdded += linesAdded
@@ -132,7 +132,7 @@ func commitContributor(handle, displayName string) ContributorMetrics {
 func BuildPullStats(pulls []PullRequest) PullStats {
 	stats := PullStats{
 		Contributors: make(map[string]ContributorMetrics),
-		Monthly:      make(map[string]map[string]int),
+		Daily:        make(map[string]map[string]int),
 	}
 	for _, pull := range pulls {
 		login := strings.TrimSpace(pull.Author.Login)
@@ -159,11 +159,11 @@ func BuildPullStats(pulls []PullRequest) PullStats {
 		}
 		stats.Contributors[key] = contributor
 
-		month := pull.CreatedAt.UTC().Format("2006-01")
-		if stats.Monthly[month] == nil {
-			stats.Monthly[month] = make(map[string]int)
+		day := pull.CreatedAt.UTC().Format(time.DateOnly)
+		if stats.Daily[day] == nil {
+			stats.Daily[day] = make(map[string]int)
 		}
-		stats.Monthly[month][key]++
+		stats.Daily[day][key]++
 		stats.Totals.Opened++
 		if pull.MergedAt != nil {
 			stats.Totals.Merged++
@@ -374,46 +374,55 @@ type activityAccumulator struct {
 	label     string
 	avatarURL string
 	total     int
-	monthly   map[string]int
+	buckets   map[string]int
 }
 
-func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, now time.Time) ActivityResponse {
+func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, _ time.Time) ActivityResponse {
 	result := ActivityResponse{Group: query.Group, Metric: query.Metric, Series: []ActivitySeries{}}
+	availableFrom, availableTo := availableActivityRange(reports, query)
+	if availableFrom.IsZero() {
+		return result
+	}
+	result.AvailableFrom = availableFrom.Format(time.DateOnly)
+	result.AvailableTo = availableTo.Format(time.DateOnly)
+	selectedFrom, selectedTo := selectedActivityRange(availableFrom, availableTo, query)
+	result.From = selectedFrom.Format(time.DateOnly)
+	result.To = selectedTo.Format(time.DateOnly)
+	if selectedFrom.After(selectedTo) {
+		return result
+	}
+	result.Granularity = activityGranularity(selectedFrom, selectedTo)
+
 	series := make(map[string]*activityAccumulator)
 	for _, report := range reports {
-		if query.RepositoryID != 0 && report.Repository.ID != query.RepositoryID {
+		if !activityReportMatches(report, query) {
 			continue
 		}
-		if query.OwnerID != 0 && report.Repository.Owner.ID != query.OwnerID {
-			continue
-		}
-		if query.Metric == ActivityPullRequests && report.Pulls == nil {
-			continue
-		}
+		daily, metadata := reportActivityData(report, query.Metric)
 
 		if query.Group == ActivityByOwner {
 			key := strconv.FormatInt(report.Repository.Owner.ID, 10)
 			entry := ensureActivity(series, key, report.Repository.Owner.Login, report.Repository.Owner.AvatarURL)
-			monthly := report.Commits.Monthly
-			if query.Metric == ActivityPullRequests {
-				monthly = report.Pulls.Monthly
-			}
-			for month, contributors := range monthly {
+			for day, contributors := range daily {
+				date, ok := activityDateInRange(day, selectedFrom, selectedTo)
+				if !ok {
+					continue
+				}
+				bucket := activityBucketStart(date, result.Granularity).Format(time.DateOnly)
 				for _, count := range contributors {
-					entry.monthly[month] += count
+					entry.buckets[bucket] += count
 					entry.total += count
 				}
 			}
 			continue
 		}
 
-		monthly := report.Commits.Monthly
-		metadata := report.Commits.Contributors
-		if query.Metric == ActivityPullRequests {
-			monthly = report.Pulls.Monthly
-			metadata = report.Pulls.Contributors
-		}
-		for month, contributors := range monthly {
+		for day, contributors := range daily {
+			date, ok := activityDateInRange(day, selectedFrom, selectedTo)
+			if !ok {
+				continue
+			}
+			bucket := activityBucketStart(date, result.Granularity).Format(time.DateOnly)
 			for key, count := range contributors {
 				person := metadata[key]
 				label := person.Name
@@ -421,7 +430,7 @@ func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, now 
 					label = person.Login
 				}
 				entry := ensureActivity(series, key, label, person.AvatarURL)
-				entry.monthly[month] += count
+				entry.buckets[bucket] += count
 				entry.total += count
 			}
 		}
@@ -440,11 +449,11 @@ func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, now 
 		return ordered[left].total > ordered[right].total
 	})
 	if len(ordered) > 8 {
-		other := &activityAccumulator{key: "other", label: "Other", monthly: make(map[string]int)}
+		other := &activityAccumulator{key: "other", label: "Other", buckets: make(map[string]int)}
 		for _, entry := range ordered[8:] {
 			other.total += entry.total
-			for month, count := range entry.monthly {
-				other.monthly[month] += count
+			for bucket, count := range entry.buckets {
+				other.buckets[bucket] += count
 			}
 		}
 		ordered = append(ordered[:8], other)
@@ -453,9 +462,8 @@ func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, now 
 		return result
 	}
 
-	firstMonth, lastMonth := activityRange(ordered, now.UTC())
-	result.From = firstMonth.Format("2006-01")
-	result.To = lastMonth.Format("2006-01")
+	firstBucket := activityBucketStart(selectedFrom, result.Granularity)
+	lastBucket := activityBucketStart(selectedTo, result.Granularity)
 	for _, entry := range ordered {
 		activitySeries := ActivitySeries{
 			Key:       entry.key,
@@ -463,9 +471,9 @@ func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, now 
 			AvatarURL: entry.avatarURL,
 			Total:     entry.total,
 		}
-		for month := firstMonth; !month.After(lastMonth); month = month.AddDate(0, 1, 0) {
-			monthKey := month.Format("2006-01")
-			activitySeries.Points = append(activitySeries.Points, ActivityPoint{Month: monthKey, Value: entry.monthly[monthKey]})
+		for bucket := firstBucket; !bucket.After(lastBucket); bucket = nextActivityBucket(bucket, result.Granularity) {
+			bucketKey := bucket.Format(time.DateOnly)
+			activitySeries.Points = append(activitySeries.Points, ActivityPoint{Date: bucketKey, Value: entry.buckets[bucketKey]})
 		}
 		result.Series = append(result.Series, activitySeries)
 	}
@@ -475,7 +483,7 @@ func BuildActivity(reports map[int64]RepositoryReport, query ActivityQuery, now 
 func ensureActivity(series map[string]*activityAccumulator, key, label, avatarURL string) *activityAccumulator {
 	entry := series[key]
 	if entry == nil {
-		entry = &activityAccumulator{key: key, label: label, avatarURL: avatarURL, monthly: make(map[string]int)}
+		entry = &activityAccumulator{key: key, label: label, avatarURL: avatarURL, buckets: make(map[string]int)}
 		series[key] = entry
 	}
 	if entry.label == "" {
@@ -487,25 +495,99 @@ func ensureActivity(series map[string]*activityAccumulator, key, label, avatarUR
 	return entry
 }
 
-func activityRange(series []*activityAccumulator, now time.Time) (time.Time, time.Time) {
-	var first time.Time
-	last := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	for _, entry := range series {
-		for month := range entry.monthly {
-			parsed, err := time.Parse("2006-01", month)
+func activityReportMatches(report RepositoryReport, query ActivityQuery) bool {
+	if query.RepositoryID != 0 && report.Repository.ID != query.RepositoryID {
+		return false
+	}
+	if query.OwnerID != 0 && report.Repository.Owner.ID != query.OwnerID {
+		return false
+	}
+	return query.Metric != ActivityPullRequests || report.Pulls != nil
+}
+
+func reportActivityData(report RepositoryReport, metric ActivityMetric) (map[string]map[string]int, map[string]ContributorMetrics) {
+	if metric == ActivityPullRequests {
+		return report.Pulls.Daily, report.Pulls.Contributors
+	}
+	return report.Commits.Daily, report.Commits.Contributors
+}
+
+func availableActivityRange(reports map[int64]RepositoryReport, query ActivityQuery) (time.Time, time.Time) {
+	var first, last time.Time
+	for _, report := range reports {
+		if !activityReportMatches(report, query) {
+			continue
+		}
+		daily, _ := reportActivityData(report, query.Metric)
+		for day, contributors := range daily {
+			if len(contributors) == 0 {
+				continue
+			}
+			date, err := time.Parse(time.DateOnly, day)
 			if err != nil {
 				continue
 			}
-			if first.IsZero() || parsed.Before(first) {
-				first = parsed
+			if first.IsZero() || date.Before(first) {
+				first = date
 			}
-			if parsed.After(last) {
-				last = parsed
+			if last.IsZero() || date.After(last) {
+				last = date
 			}
 		}
 	}
-	if first.IsZero() {
-		first = last
-	}
 	return first, last
+}
+
+func selectedActivityRange(availableFrom, availableTo time.Time, query ActivityQuery) (time.Time, time.Time) {
+	selectedFrom, selectedTo := availableFrom, availableTo
+	if query.From != nil && query.From.After(selectedFrom) {
+		selectedFrom = *query.From
+	}
+	if query.To != nil && query.To.Before(selectedTo) {
+		selectedTo = *query.To
+	}
+	return selectedFrom, selectedTo
+}
+
+func activityGranularity(from, to time.Time) ActivityGranularity {
+	days := int(to.Sub(from).Hours() / 24)
+	if days <= 62 {
+		return ActivityByDay
+	}
+	if days <= 730 {
+		return ActivityByWeek
+	}
+	return ActivityByMonth
+}
+
+func activityDateInRange(day string, from, to time.Time) (time.Time, bool) {
+	date, err := time.Parse(time.DateOnly, day)
+	if err != nil || date.Before(from) || date.After(to) {
+		return time.Time{}, false
+	}
+	return date, true
+}
+
+func activityBucketStart(date time.Time, granularity ActivityGranularity) time.Time {
+	date = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+	switch granularity {
+	case ActivityByWeek:
+		daysSinceMonday := (int(date.Weekday()) + 6) % 7
+		return date.AddDate(0, 0, -daysSinceMonday)
+	case ActivityByMonth:
+		return time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, time.UTC)
+	default:
+		return date
+	}
+}
+
+func nextActivityBucket(date time.Time, granularity ActivityGranularity) time.Time {
+	switch granularity {
+	case ActivityByWeek:
+		return date.AddDate(0, 0, 7)
+	case ActivityByMonth:
+		return date.AddDate(0, 1, 0)
+	default:
+		return date.AddDate(0, 0, 1)
+	}
 }

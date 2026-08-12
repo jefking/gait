@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jefking/gait/backend/internal/dashboard"
 )
@@ -41,6 +42,16 @@ func activityHandler(service DashboardService) http.HandlerFunc {
 		query.RepositoryID, err = optionalPositiveInt64(request.URL.Query().Get("repository_id"))
 		if err != nil {
 			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "repository_id must be a positive integer"})
+			return
+		}
+		query.From, err = optionalDate(request.URL.Query().Get("from"))
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "from must use YYYY-MM-DD"})
+			return
+		}
+		query.To, err = optionalDate(request.URL.Query().Get("to"))
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "to must use YYYY-MM-DD"})
 			return
 		}
 		activity, err := service.Activity(query)
@@ -99,6 +110,17 @@ func optionalPositiveInt64(value string) (int64, error) {
 		return 0, errors.New("not a positive integer")
 	}
 	return parsed, nil
+}
+
+func optionalDate(value string) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.DateOnly, value)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 func writeJSONValue(response http.ResponseWriter, status int, value any) {
