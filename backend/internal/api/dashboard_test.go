@@ -89,6 +89,21 @@ func TestStartSyncAPIAcceptsPATWithoutEchoingIt(t *testing.T) {
 	}
 }
 
+func TestStartSyncAPIAcceptsRefreshWithoutPAT(t *testing.T) {
+	service := &fakeDashboardService{}
+	request := httptest.NewRequest(http.MethodPost, "/api/sync", bytes.NewBufferString(`{}`))
+	response := httptest.NewRecorder()
+
+	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, response.Code, response.Body.String())
+	}
+	if service.started != "" {
+		t.Fatalf("refresh unexpectedly supplied PAT")
+	}
+}
+
 func TestStartSyncAPIRejectsConcurrentJob(t *testing.T) {
 	service := &fakeDashboardService{startErr: dashboard.ErrSyncActive}
 	request := httptest.NewRequest(http.MethodPost, "/api/sync", bytes.NewBufferString(`{"pat":"token"}`))

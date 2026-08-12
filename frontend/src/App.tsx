@@ -182,6 +182,16 @@ function App() {
     }
   }
 
+  const refresh = async () => {
+    setDashboardError(undefined)
+    try {
+      const sync = await startSync()
+      setDashboard((current) => ({ snapshot: current?.snapshot ?? null, sync }))
+    } catch (error) {
+      setDashboardError(error instanceof Error ? error.message : 'Could not refresh repositories.')
+    }
+  }
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <div className="page-glow" aria-hidden="true" />
@@ -218,11 +228,7 @@ function App() {
               .then((result) => { setIdentities(result.identities); setInsightEpoch((current) => current + 1) })
               .catch((error: unknown) => setDashboardError(error instanceof Error ? error.message : 'Could not update identity.'))
           }}
-          onRefresh={() => {
-            setModalError(undefined)
-            setModalMode('settings')
-            setModalOpen(true)
-          }}
+          onRefresh={() => void refresh()}
           onSettings={() => {
             setModalError(undefined)
             setModalMode('settings')

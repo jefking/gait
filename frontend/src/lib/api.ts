@@ -509,13 +509,13 @@ export function updateIdentity(
 }
 
 export async function startSync(
-  pat: string,
+  pat?: string,
   signal?: AbortSignal,
 ): Promise<SyncStatus> {
   const response = await requestJSON<{ sync: SyncStatus }>('/api/sync', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pat }),
+    body: JSON.stringify(pat ? { pat } : {}),
     signal,
   })
   return response.sync

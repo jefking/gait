@@ -113,6 +113,20 @@ describe('App', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('refreshes repositories with retained server credentials', async () => {
+    const fetchMock = mockAPI()
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await screen.findByText('Team constellation')
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh repositories' }))
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) =>
+      url === '/api/sync' && init?.body === JSON.stringify({}),
+    )).toBe(true))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('blocks first use, submits a PAT, clears the input, and starts asynchronous progress', async () => {
     const fetchMock = mockAPI({
       snapshot: null,

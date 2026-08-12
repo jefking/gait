@@ -236,6 +236,43 @@ func TestManagerSyncDiffsRepositoriesPersistsCacheAndNeverPersistsPAT(t *testing
 	}
 }
 
+func TestManagerReusesAndReplacesInMemoryPAT(t *testing.T) {
+	var tokens []string
+	manager, err := NewManager(ManagerConfig{
+		DataDir: t.TempDir(),
+		Runner:  &fakeRepositoryRunner{},
+		GitHubFactory: func(token string, _ RateLimitCallbacks) (GitHubService, error) {
+			tokens = append(tokens, token)
+			return &fakeGitHubService{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	defer manager.Close()
+
+	for _, token := range []string{"first-token", "", "replacement-token", ""} {
+		if _, err := manager.Start(token); err != nil {
+			t.Fatalf("start sync: %v", err)
+		}
+		waitForSync(t, manager)
+	}
+	if got, want := strings.Join(tokens, ","), "first-token,first-token,replacement-token,replacement-token"; got != want {
+		t.Fatalf("unexpected token sequence: got %q want %q", got, want)
+	}
+}
+
+func TestManagerRefreshRequiresPreviouslySuppliedPAT(t *testing.T) {
+	manager, err := NewManager(ManagerConfig{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	defer manager.Close()
+	if _, err := manager.Start(""); err == nil || err.Error() != "PAT is required" {
+		t.Fatalf("expected missing PAT error, got %v", err)
+	}
+}
+
 func TestManagerActivityUsesSnapshotTimeForLiveness(t *testing.T) {
 	evaluatedAt := time.Date(2025, time.January, 10, 0, 0, 0, 0, time.UTC)
 	manager := &Manager{

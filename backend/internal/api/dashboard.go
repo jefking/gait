@@ -275,8 +275,8 @@ func syncHandler(service DashboardService) http.HandlerFunc {
 			return
 		}
 		input.PAT = strings.TrimSpace(input.PAT)
-		if input.PAT == "" || len(input.PAT) > maximumPATLength {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "PAT must be between 1 and 4096 characters"})
+		if len(input.PAT) > maximumPATLength {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "PAT must not exceed 4096 characters"})
 			return
 		}
 		status, err := service.Start(input.PAT)
