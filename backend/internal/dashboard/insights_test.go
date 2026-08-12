@@ -228,3 +228,124 @@ func TestIdentityPatchPreservesClassificationAndCanUnmerge(t *testing.T) {
 		t.Fatalf("unmerge removed classification: %+v", got)
 	}
 }
+
+func TestManagerInsightMethodsExposeValidatedResults(t *testing.T) {
+	manager, err := NewManager(ManagerConfig{DataDir: t.TempDir(), Runner: &fakeRepositoryRunner{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	at := time.Date(2025, time.January, 2, 12, 0, 0, 0, time.UTC)
+	manager.reports = map[int64]RepositoryReport{1: {
+		Repository: Repository{ID: 1, FullName: "org/repo"},
+		Commits:    CommitStats{Events: []CommitEvent{{Hash: "abc", CommittedAt: at, Author: ContributorMetrics{Key: "github:alex", Login: "alex", Name: "Alex"}}}},
+	}}
+	manager.identityOverrides = map[string]IdentityOverride{"github:alex": {Kind: ActorHuman}}
+
+	overview, err := manager.InsightOverview(InsightQuery{})
+	if err != nil || overview.Meta.Coverage.TotalCommits != 1 {
+		t.Fatalf("unexpected overview: %+v, %v", overview, err)
+	}
+	network, err := manager.InsightNetwork(InsightQuery{})
+	if err != nil || len(network.Nodes) != 1 {
+		t.Fatalf("unexpected network: %+v, %v", network, err)
+	}
+	ramps, err := manager.InsightRamps(InsightQuery{})
+	if err != nil || ramps.Handoffs == nil {
+		t.Fatalf("unexpected ramps: %+v, %v", ramps, err)
+	}
+	rankings, err := manager.InsightRankings(InsightQuery{Cohort: "humans", Metric: "commits"})
+	if err != nil || len(rankings.Leaderboard) != 1 || rankings.Leaderboard[0].Label != "Alex" {
+		t.Fatalf("unexpected rankings: %+v, %v", rankings, err)
+	}
+	for name, call := range map[string]func() error{
+		"overview": func() error { _, err := manager.InsightOverview(InsightQuery{SessionHours: 999}); return err },
+		"network":  func() error { _, err := manager.InsightNetwork(InsightQuery{SessionHours: 999}); return err },
+		"ramps":    func() error { _, err := manager.InsightRamps(InsightQuery{SessionHours: 999}); return err },
+		"rankings": func() error { _, err := manager.InsightRankings(InsightQuery{SessionHours: 999}); return err },
+	} {
+		t.Run(name+" validates query", func(t *testing.T) {
+			if err := call(); err == nil {
+				t.Fatal("expected invalid query error")
+			}
+		})
+	}
+}
+
+func TestRankingValidationOrderingAndStatistics(t *testing.T) {
+	if _, err := buildRankings(nil, nil, InsightQuery{Cohort: "robots"}, InsightMeta{}); err == nil {
+		t.Fatal("expected invalid cohort error")
+	}
+	if _, err := buildRankings(nil, nil, InsightQuery{Cohort: "humans", Metric: "handoffs"}, InsightMeta{}); err == nil {
+		t.Fatal("expected invalid individual metric error")
+	}
+	entries := orderedRanks(
+		map[string]float64{"b": 1, "a": 1, "c": 2},
+		map[string]string{"a": "Alpha", "b": "Beta", "c": "Charlie"},
+		map[string]ActorKind{"a": ActorHuman, "b": ActorHuman, "c": ActorAgent},
+		map[string]map[string]float64{}, "higher",
+	)
+	if len(entries) != 3 || entries[0].Key != "c" || entries[1].Key != "a" || entries[2].Rank != 3 {
+		t.Fatalf("unexpected ranking order: %+v", entries)
+	}
+	lower := orderedRanks(map[string]float64{"a": 2, "b": 1}, map[string]string{"a": "A", "b": "B"}, nil, nil, "lower")
+	if lower[0].Key != "b" {
+		t.Fatalf("lower-is-better order ignored: %+v", lower)
+	}
+	if median(nil) != 0 || median([]float64{9, 1, 5}) != 5 || median([]float64{8, 2}) != 5 {
+		t.Fatal("median failed empty, odd, or even input")
+	}
+	values := []string{"one", "two", "three"}
+	got := removeString(values, "two")
+	if len(got) != 2 || got[0] != "one" || got[1] != "three" {
+		t.Fatalf("unexpected removal: %v", got)
+	}
+}
+
+func TestPullApprovalUsesLatestEligibleIndependentReview(t *testing.T) {
+	merged := time.Date(2025, time.January, 3, 0, 0, 0, 0, time.UTC)
+	before := merged.Add(-time.Hour)
+	after := merged.Add(time.Hour)
+	pull := PullRequest{Author: Person{Login: "author"}, MergedAt: &merged, Reviews: []PullRequestReview{
+		{Author: Person{Login: "author"}, State: "APPROVED", SubmittedAt: &before},
+		{Author: Person{Login: "reviewer"}, State: "CHANGES_REQUESTED", SubmittedAt: &before},
+		{Author: Person{Login: "reviewer"}, State: "APPROVED", SubmittedAt: &after},
+	}}
+	if pullHasApproval(pull) {
+		t.Fatal("post-merge and self approvals must not count")
+	}
+	pull.Reviews = append(pull.Reviews, PullRequestReview{Author: Person{Login: "second"}, State: " approved ", SubmittedAt: &before})
+	if !pullHasApproval(pull) {
+		t.Fatal("eligible independent approval was not detected")
+	}
+}
+
+func TestPersonMetricsAndIdentityFilters(t *testing.T) {
+	person := personMetrics(Person{Login: " Alex ", AvatarURL: "avatar", Type: "User"})
+	if person.Key != "github:alex" || person.Login != "Alex" || person.Name != "Alex" || person.AvatarURL != "avatar" || person.Type != "User" {
+		t.Fatalf("unexpected person metrics: %+v", person)
+	}
+	unknown := personMetrics(Person{Name: "Anonymous"})
+	if unknown.Key != "git:unknown" || unknown.Name != "Anonymous" {
+		t.Fatalf("unexpected anonymous metrics: %+v", unknown)
+	}
+
+	human := &resolvedIdentity{IdentitySummary: IdentitySummary{Kind: ActorHuman}}
+	if !actorFilterMatchesIdentity("", nil) || !actorFilterMatchesIdentity(ActorHuman, human) || actorFilterMatchesIdentity(ActorAgent, human) || actorFilterMatchesIdentity(ActorHuman, nil) {
+		t.Fatal("identity actor filter returned unexpected match")
+	}
+}
+
+func TestPullResolvedAtPrefersMergeTime(t *testing.T) {
+	merged := time.Date(2025, time.January, 2, 0, 0, 0, 0, time.UTC)
+	closed := merged.Add(time.Hour)
+	if got := pullResolvedAt(PullRequest{MergedAt: &merged, ClosedAt: &closed}); got != &merged {
+		t.Fatalf("merge time not preferred: %v", got)
+	}
+	if got := pullResolvedAt(PullRequest{ClosedAt: &closed}); got != &closed {
+		t.Fatalf("close time not returned: %v", got)
+	}
+	if got := pullResolvedAt(PullRequest{}); got != nil {
+		t.Fatalf("open pull unexpectedly resolved at %v", got)
+	}
+}

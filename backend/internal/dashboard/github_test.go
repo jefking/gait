@@ -3,14 +3,49 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestHTTPErrorFormattingAndPermissionClassification(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		want       string
+		permission bool
+	}{
+		{"message", &HTTPError{StatusCode: http.StatusUnauthorized, Message: "bad credentials"}, "GitHub returned HTTP 401: bad credentials", false},
+		{"empty message", &HTTPError{StatusCode: http.StatusNotFound}, "GitHub returned HTTP 404", true},
+		{"wrapped forbidden", fmt.Errorf("pulls: %w", &HTTPError{StatusCode: http.StatusForbidden}), "pulls: GitHub returned HTTP 403", true},
+		{"unrelated", errors.New("offline"), "offline", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.err.Error(); got != test.want {
+				t.Fatalf("unexpected error text: %q", got)
+			}
+			if got := IsPullPermissionError(test.err); got != test.permission {
+				t.Fatalf("permission classification = %t, want %t", got, test.permission)
+			}
+		})
+	}
+}
+
+func TestGitHubErrorMessageParsesAndSanitizesResponse(t *testing.T) {
+	if got := githubErrorMessage(strings.NewReader(`{"message":"  access denied  "}`)); got != "access denied" {
+		t.Fatalf("unexpected parsed message: %q", got)
+	}
+	if got := githubErrorMessage(strings.NewReader("not JSON")); got != "request failed" {
+		t.Fatalf("unexpected malformed-body fallback: %q", got)
+	}
+}
 
 func TestGitHubClientPaginatesRepositoriesAndUsesBearerToken(t *testing.T) {
 	var repoRequests atomic.Int32

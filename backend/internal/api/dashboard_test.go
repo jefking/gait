@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -21,6 +22,9 @@ type fakeDashboardService struct {
 	insightQuery     dashboard.InsightQuery
 	identityKey      string
 	identityOverride dashboard.IdentityOverride
+	activityErr      error
+	insightErr       error
+	identityErr      error
 }
 
 func (service *fakeDashboardService) Dashboard() dashboard.DashboardResponse {
@@ -29,7 +33,7 @@ func (service *fakeDashboardService) Dashboard() dashboard.DashboardResponse {
 
 func (service *fakeDashboardService) Activity(query dashboard.ActivityQuery) (dashboard.ActivityResponse, error) {
 	service.query = query
-	return dashboard.ActivityResponse{Group: query.Group, Metric: query.Metric, Series: []dashboard.ActivitySeries{}}, nil
+	return dashboard.ActivityResponse{Group: query.Group, Metric: query.Metric, Series: []dashboard.ActivitySeries{}}, service.activityErr
 }
 
 func (service *fakeDashboardService) Start(token string) (dashboard.SyncStatus, error) {
@@ -46,19 +50,19 @@ func (service *fakeDashboardService) Subscribe(context.Context) <-chan dashboard
 
 func (service *fakeDashboardService) InsightOverview(query dashboard.InsightQuery) (dashboard.OverviewResponse, error) {
 	service.insightQuery = query
-	return dashboard.OverviewResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, nil
+	return dashboard.OverviewResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, service.insightErr
 }
 func (service *fakeDashboardService) InsightNetwork(query dashboard.InsightQuery) (dashboard.NetworkResponse, error) {
 	service.insightQuery = query
-	return dashboard.NetworkResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, nil
+	return dashboard.NetworkResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, service.insightErr
 }
 func (service *fakeDashboardService) InsightRamps(query dashboard.InsightQuery) (dashboard.RampResponse, error) {
 	service.insightQuery = query
-	return dashboard.RampResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, nil
+	return dashboard.RampResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, service.insightErr
 }
 func (service *fakeDashboardService) InsightRankings(query dashboard.InsightQuery) (dashboard.RankingResponse, error) {
 	service.insightQuery = query
-	return dashboard.RankingResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}, Cohort: query.Cohort, Metric: query.Metric}, nil
+	return dashboard.RankingResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}, Cohort: query.Cohort, Metric: query.Metric}, service.insightErr
 }
 func (service *fakeDashboardService) Identities() dashboard.IdentityResponse {
 	return dashboard.IdentityResponse{Identities: []dashboard.IdentitySummary{}}
@@ -66,7 +70,7 @@ func (service *fakeDashboardService) Identities() dashboard.IdentityResponse {
 func (service *fakeDashboardService) UpdateIdentity(key string, override dashboard.IdentityOverride) (dashboard.IdentityResponse, error) {
 	service.identityKey = key
 	service.identityOverride = override
-	return service.Identities(), nil
+	return service.Identities(), service.identityErr
 }
 
 func TestStartSyncAPIAcceptsPATWithoutEchoingIt(t *testing.T) {
@@ -215,5 +219,122 @@ func TestDashboardEventsStreamsInvalidations(t *testing.T) {
 	want := "event: dashboard\ndata: {\"type\":\"snapshot\",\"revision\":7,\"repository\":{\"id\":9,\"full_name\":\"org/repo\",\"sync_status\":\"synced\",\"liveness\":{\"state\":\"dead\",\"is_dead\":true,\"basis\":\"default_branch_commits\",\"evaluated_at\":\"0001-01-01T00:00:00Z\"}}}\n\n"
 	if response.Body.String() != want {
 		t.Fatalf("unexpected event body: %q", response.Body.String())
+	}
+}
+
+func TestActivityAPIRejectsInvalidFiltersAndServiceErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		err  error
+		want string
+	}{
+		{"invalid boolean", "/api/activity?exclude_dead=sometimes", nil, "exclude_dead must be true or false"},
+		{"invalid owner", "/api/activity?owner_id=0", nil, "owner_id must be a positive integer"},
+		{"invalid repository", "/api/activity?repository_id=-1", nil, "repository_id must be a positive integer"},
+		{"invalid end date", "/api/activity?to=tomorrow", nil, "to must use YYYY-MM-DD"},
+		{"service validation", "/api/activity", errors.New("unsupported group"), "unsupported group"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &fakeDashboardService{activityErr: test.err}
+			response := httptest.NewRecorder()
+			NewRouter(t.TempDir(), service).ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.url, nil))
+			if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(test.want)) {
+				t.Fatalf("expected bad request containing %q, got %d: %s", test.want, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestInsightAPIRoutesAndRejectsInvalidQueries(t *testing.T) {
+	for _, route := range []string{"overview", "network", "ramps"} {
+		t.Run(route+" success", func(t *testing.T) {
+			response := httptest.NewRecorder()
+			NewRouter(t.TempDir(), &fakeDashboardService{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/insights/"+route, nil))
+			if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("unexpected response: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	tests := []struct{ name, query, want string }{
+		{"boolean", "exclude_dead=nope", "exclude_dead must be true or false"},
+		{"owner", "owner_id=x", "owner_id must be a positive integer"},
+		{"repository", "repository_id=0", "repository_id must be a positive integer"},
+		{"from", "from=yesterday", "from must use YYYY-MM-DD"},
+		{"to", "to=2025-13-01", "to must use YYYY-MM-DD"},
+		{"session", "session_hours=soon", "session_hours must be an integer"},
+		{"adoption", "adoption_days=many", "adoption_days must be an integer"},
+		{"survival", "survival_days=forever", "survival_days must be an integer"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/api/insights/overview?"+test.query, nil)
+			NewRouter(t.TempDir(), &fakeDashboardService{}).ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(test.want)) {
+				t.Fatalf("expected %q, got %d: %s", test.want, response.Code, response.Body.String())
+			}
+		})
+	}
+	response := httptest.NewRecorder()
+	service := &fakeDashboardService{insightErr: errors.New("range unavailable")}
+	NewRouter(t.TempDir(), service).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/insights/network", nil))
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte("range unavailable")) {
+		t.Fatalf("service error not returned: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestIdentityAPIHandlesReadsAndInvalidUpdates(t *testing.T) {
+	response := httptest.NewRecorder()
+	NewRouter(t.TempDir(), &fakeDashboardService{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/identities", nil))
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected identities response: %d %s", response.Code, response.Body.String())
+	}
+	tests := []struct {
+		name string
+		body string
+		err  error
+		want string
+	}{
+		{"malformed", `{`, nil, "request must contain an identity override"},
+		{"unknown field", `{"kind":"agent","extra":true}`, nil, "request must contain an identity override"},
+		{"multiple objects", `{} {}`, nil, "request must contain one JSON object"},
+		{"service rejection", `{"kind":"robot"}`, errors.New("kind must be human, agent, or unknown"), "kind must be human, agent, or unknown"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			service := &fakeDashboardService{identityErr: test.err}
+			request := httptest.NewRequest(http.MethodPatch, "/api/identities/github:user", bytes.NewBufferString(test.body))
+			NewRouter(t.TempDir(), service).ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(test.want)) {
+				t.Fatalf("expected %q, got %d: %s", test.want, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestStartSyncAPIRejectsMalformedOversizedAndServiceFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		err  error
+		want string
+	}{
+		{"malformed", `{`, nil, "request must contain a PAT"},
+		{"multiple objects", `{} {}`, nil, "request must contain one JSON object"},
+		{"oversized token", `{"pat":"` + string(bytes.Repeat([]byte{'x'}, maximumPATLength+1)) + `"}`, nil, "PAT must not exceed 4096 characters"},
+		{"service failure", `{}`, errors.New("no retained PAT"), "no retained PAT"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			service := &fakeDashboardService{startErr: test.err}
+			NewRouter(t.TempDir(), service).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/sync", bytes.NewBufferString(test.body)))
+			if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(test.want)) {
+				t.Fatalf("expected %q, got %d: %s", test.want, response.Code, response.Body.String())
+			}
+		})
 	}
 }
