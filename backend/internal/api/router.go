@@ -6,11 +6,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jefking/gait/backend/internal/dashboard"
 )
+
+type DashboardService interface {
+	Dashboard() dashboard.DashboardResponse
+	Activity(dashboard.ActivityQuery) (dashboard.ActivityResponse, error)
+	Start(string) (dashboard.SyncStatus, error)
+}
 
 // NewRouter creates the application router. API routes are registered before
 // the static fallback so they can never be mistaken for frontend routes.
-func NewRouter(staticDir string) http.Handler {
+func NewRouter(staticDir string, services ...DashboardService) http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
@@ -18,6 +25,12 @@ func NewRouter(staticDir string) http.Handler {
 	router.Use(middleware.Recoverer)
 
 	router.Get("/api/health", healthHandler)
+	if len(services) > 0 && services[0] != nil {
+		service := services[0]
+		router.Get("/api/dashboard", dashboardHandler(service))
+		router.Get("/api/activity", activityHandler(service))
+		router.Post("/api/sync", syncHandler(service))
+	}
 
 	frontend := newSPAHandler(staticDir)
 	router.NotFound(func(response http.ResponseWriter, request *http.Request) {

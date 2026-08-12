@@ -34,9 +34,9 @@ FROM alpine:3.24.1 AS runtime
 RUN apk add --no-cache ca-certificates git \
     && addgroup -S app \
     && adduser -S -G app app \
-    && mkdir -p /app/tmp \
-    && chown app:app /app/tmp \
-    && chmod 0700 /app/tmp
+    && mkdir -p /app/tmp /app/data \
+    && chown app:app /app/tmp /app/data \
+    && chmod 0700 /app/tmp /app/data
 
 WORKDIR /app
 
@@ -46,7 +46,11 @@ COPY --from=frontend-build --chown=app:app /src/frontend/dist /app/public
 
 ENV PORT=8080 \
     STATIC_DIR=/app/public \
+    DATA_DIR=/app/data \
+    SYNC_CONCURRENCY=4 \
     TMPDIR=/app/tmp
+
+VOLUME ["/app/data"]
 
 EXPOSE 8080
 
@@ -54,7 +58,8 @@ USER app
 
 RUN git --version \
     && test -x /usr/local/bin/git-changes-by-day \
-    && test -w "${TMPDIR}"
+    && test -w "${TMPDIR}" \
+    && test -w "${DATA_DIR}"
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -qO- "http://127.0.0.1:${PORT}/api/health" >/dev/null || exit 1

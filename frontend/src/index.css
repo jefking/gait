@@ -16,8 +16,59 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
 body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+summary,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.page-glow {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 15% -10%, rgb(34 211 238 / 0.1), transparent 30rem),
+    radial-gradient(circle at 90% 10%, rgb(99 102 241 / 0.08), transparent 28rem);
+}
+
+.metric-card {
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(16px);
+}
+
+.metric-card::after {
+  position: absolute;
+  right: -3rem;
+  bottom: -4rem;
+  width: 8rem;
+  height: 8rem;
+  content: "";
+  border-radius: 999px;
+  background: rgb(34 211 238 / 0.035);
+}
+
+::selection {
+  color: #ecfeff;
+  background: rgb(8 145 178 / 0.55);
 }

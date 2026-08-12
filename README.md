@@ -1,33 +1,50 @@
 # Gait
 
-A small React + Go starter that builds into a single production container. The
-Go server exposes the API and serves the compiled React application, including
-files copied from `frontend/public`.
+Gait is a personal GitHub statistics dashboard. It discovers every repository
+visible to a supplied GitHub personal access token, keeps an app-owned clone of
+each repository up to date, analyzes default-branch history with
+[`git-changes-by-day`](https://github.com/moltenbot000/git-changes-by-day), and
+combines the result with GitHub pull request history.
+
+The React dashboard groups repositories by owner or organization and shows
+all-time monthly activity, repository totals, and contributor rankings. The Go
+server performs all GitHub, Git, analysis, caching, and background-job work.
 
 ## Stack
 
-- React 19 and TypeScript, built with Vite 8
-- Tailwind CSS 4 through the official Vite plugin
-- D3.js for data visualization
-- Lucide React icons
+- React 19, TypeScript, Vite, Tailwind CSS, D3, and Lucide
 - Go 1.26.5 with Chi v5
-- `git-changes-by-day` CLI for backend Git history analysis
-- A multi-stage Docker production image
+- `git` and a pinned `git-changes-by-day` executable
+- A multi-stage Docker image that serves the API and compiled frontend
 
-## Project layout
+## How syncing works
 
-```text
-.
-├── backend/
-│   ├── cmd/server/       # Application entry point
-│   └── internal/api/     # Router, handlers, and static file serving
-├── frontend/
-│   ├── public/images/    # Files served unchanged from /images/*
-│   └── src/
-│       ├── components/   # Reusable React components
-│       └── lib/          # Browser-side API helpers
-└── Dockerfile            # Production build and runtime image
-```
+Every full page load opens the GitHub PAT dialog. Submitting a token starts an
+asynchronous sync; if a cached snapshot exists, it can be viewed without
+submitting another token.
+
+The server:
+
+1. Fetches the authenticated user and all repositories visible to the PAT.
+2. Clones new repositories and fetches existing app-owned clones using four
+   concurrent workers by default.
+3. Checks out the latest default branch and runs `git-changes-by-day`.
+4. Fetches all pull requests on first use and only updated pull requests later.
+5. Atomically publishes cached per-repository reports and dashboard snapshots.
+
+The PAT is held only in frontend and backend memory for the duration of the
+request/job. It is not placed in clone URLs, Git remotes, files, snapshots,
+logs, or browser storage. Git authentication is supplied only to the relevant
+child process. Use HTTPS and external access control if the app is exposed
+beyond a trusted local network.
+
+### PAT access
+
+A fine-grained PAT should grant read access to repository metadata, contents,
+and pull requests for every repository to include. Organization repositories
+may require SSO authorization. A token can only discover repositories that the
+token itself is authorized to access. Repositories without pull-request read
+permission remain visible, with PR statistics marked unavailable.
 
 ## Local development
 
@@ -35,16 +52,23 @@ Requirements:
 
 - Node.js 26.5.0 and npm 12.0.2
 - Go 1.26.5
-- Docker, for building the production image
+- `git`
+- `git-changes-by-day` on `PATH`
 
-Start the API from one terminal:
+Install the analyzer pinned by the production image:
+
+```sh
+go install github.com/moltenbot000/git-changes-by-day@87ad8a8d0d770a120079a439cf3e9ab205c8456d
+```
+
+Start the API:
 
 ```sh
 cd backend
 go run ./cmd/server
 ```
 
-Start the frontend from another terminal:
+Start the frontend in another terminal:
 
 ```sh
 cd frontend
@@ -52,108 +76,65 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>. Vite proxies `/api` requests to the Go server at
-`http://localhost:8080`, so no development CORS configuration is required.
+Open <http://localhost:5173>. Vite proxies `/api` to
+`http://localhost:8080`. Local clones and reports are written to
+`backend/data/` by default and are ignored by Git.
 
 ## Production container
 
-Build and run the application:
+Use a named volume so clones and statistics survive container replacement:
 
 ```sh
 docker build -t gait .
-docker run --rm -p 8080:8080 gait
+docker run --rm \
+  -p 8080:8080 \
+  -v gait-data:/app/data \
+  gait
 ```
 
-Then open <http://localhost:8080> or check the API directly:
+Open <http://localhost:8080>. The image runs as an unprivileged user and the
+volume contains only app-owned repository clones and reports—not the PAT.
 
-```sh
-curl http://localhost:8080/api/health
-```
+## API
 
-The container runs as an unprivileged user and includes a health check against
-`GET /api/health`.
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/health` | Liveness check |
+| `GET` | `/api/dashboard` | Latest snapshot and current sync status |
+| `GET` | `/api/activity` | Monthly owner or contributor activity |
+| `POST` | `/api/sync` | Start a background sync with `{ "pat": "…" }` |
 
-### Git changes CLI
-
-The production image installs
-[`git-changes-by-day`](https://github.com/moltenbot000/git-changes-by-day) at
-`/usr/local/bin/git-changes-by-day`, along with its required `git` executable.
-The tool is pinned to a specific upstream commit in the Dockerfile so container
-builds remain reproducible. It is a runtime CLI, not a dependency of the
-backend Go module.
-
-Backend code can invoke it with `os/exec`, for example:
-
-```go
-command := exec.CommandContext(
-    ctx,
-    "git-changes-by-day",
-    "-repo", repositoryPath,
-    "-text-out", outputPath,
-)
-```
-
-The target repository must be available inside the container, usually through
-a read-only bind mount. The CLI and `git` both run as the container's
-unprivileged `app` user.
-
-The image provides a private, app-owned workspace at `/app/tmp` and sets
-`TMPDIR=/app/tmp`. Go code should use `os.TempDir()` and `os.CreateTemp` for
-temporary file I/O; both resolve to this directory in the container. CLI output
-paths should also be created beneath `os.TempDir()`:
-
-```go
-outputPath := filepath.Join(os.TempDir(), "commit-text.csv")
-```
-
-The image build verifies that the `app` user can execute `git`, execute
-`git-changes-by-day`, and write to `TMPDIR`.
-
-To build with another upstream commit or version:
-
-```sh
-docker build \
-  --build-arg GIT_CHANGES_BY_DAY_VERSION=<git-ref> \
-  -t gait .
-```
+`/api/activity` accepts `group_by=owner|contributor`,
+`metric=commits|pull_requests`, and optional numeric `owner_id` and
+`repository_id` filters.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `8080` | HTTP port used by the Go server |
-| `STATIC_DIR` | `../frontend/dist` | Directory containing the compiled frontend |
-| `TMPDIR` | Operating-system default | Temporary file workspace used by Go and child processes |
+| `PORT` | `8080` | Go HTTP port |
+| `STATIC_DIR` | `../frontend/dist` | Compiled frontend directory |
+| `DATA_DIR` | `./data` | Persistent clones, reports, and snapshot |
+| `SYNC_CONCURRENCY` | `4` | Concurrent repository workers; capped at 16 |
+| `TMPDIR` | Operating-system default | Temporary Go and CLI workspace |
 
-The container sets `STATIC_DIR=/app/public` and `TMPDIR=/app/tmp`. During
-frontend development, Vite serves the UI, so the Go API does not require an
-existing frontend build.
-
-## Static images
-
-Place images in `frontend/public/images`. Vite copies them into the production
-build unchanged, and they are available from root-relative URLs:
-
-```tsx
-<img src="/images/example.png" alt="Example" />
-```
-
-`frontend/public/images/placeholder.svg` is included as a serving example.
+The container sets `STATIC_DIR=/app/public`, `DATA_DIR=/app/data`, and
+`TMPDIR=/app/tmp`.
 
 ## Checks
-
-Run backend tests:
 
 ```sh
 cd backend
 go test ./...
-```
 
-Run frontend checks:
-
-```sh
-cd frontend
+cd ../frontend
 npm run lint
 npm run typecheck
+npm test
 npm run build
 ```
+
+Commit statistics intentionally cover only commits reachable from the latest
+default branch. Other branches, tags, submodules, and Git LFS contents are out
+of scope. PR history is counted by author and creation month; open, closed, and
+merged totals represent current status.

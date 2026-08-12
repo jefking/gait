@@ -1,64 +1,213 @@
-import { Boxes, Container, Palette } from 'lucide-react'
-import { ApiStatus } from './components/ApiStatus'
-
-const stack = [
-  {
-    name: 'React + TypeScript',
-    description: 'A typed frontend with fast Vite development builds.',
-    icon: Boxes,
-  },
-  {
-    name: 'Tailwind CSS',
-    description: 'Utility-first styles compiled with the official Vite plugin.',
-    icon: Palette,
-  },
-  {
-    name: 'Go API',
-    description: 'A Chi-powered API and static server in one container.',
-    icon: Container,
-  },
-]
+import { Activity, Database, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { DashboardView } from './components/DashboardView'
+import { TokenModal } from './components/TokenModal'
+import {
+  getActivity,
+  getDashboard,
+  isSyncActive,
+  startSync,
+  type ActivityGroup,
+  type ActivityMetric,
+  type ActivityResponse,
+  type DashboardResponse,
+} from './lib/api'
 
 function App() {
+  const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
+  const [loadingDashboard, setLoadingDashboard] = useState(true)
+  const [dashboardError, setDashboardError] = useState<string>()
+  const [modalOpen, setModalOpen] = useState(true)
+  const [modalError, setModalError] = useState<string>()
+  const [submitting, setSubmitting] = useState(false)
+
+  const [groupBy, setGroupBy] = useState<ActivityGroup>('owner')
+  const [metric, setMetric] = useState<ActivityMetric>('commits')
+  const [ownerId, setOwnerId] = useState<number>()
+  const [repositoryId, setRepositoryId] = useState<number>()
+  const [activityResult, setActivityResult] = useState<{
+    key: string
+    data: ActivityResponse
+  }>()
+
+  useEffect(() => {
+    const controller = new AbortController()
+    getDashboard(controller.signal)
+      .then((response) => {
+        setDashboard(response)
+        if (response.sync.state === 'failed') {
+          setModalError(response.sync.message || 'The previous sync failed.')
+        }
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setDashboardError(error instanceof Error ? error.message : 'Could not load the dashboard.')
+      })
+      .finally(() => setLoadingDashboard(false))
+    return () => controller.abort()
+  }, [])
+
+  const syncActive = dashboard ? isSyncActive(dashboard.sync) : false
+  const activityRequestKey = dashboard?.snapshot && !syncActive
+    ? [dashboard.snapshot.generated_at, groupBy, metric, ownerId ?? '', repositoryId ?? ''].join(':')
+    : ''
+
+  useEffect(() => {
+    if (!syncActive) return
+    let cancelled = false
+    const poll = () => {
+      void getDashboard()
+        .then((response) => {
+          if (cancelled) return
+          setDashboard(response)
+          setDashboardError(undefined)
+          if (response.sync.state === 'failed') {
+            setModalError(response.sync.message || 'The sync failed.')
+            setModalOpen(true)
+          }
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) setDashboardError(error instanceof Error ? error.message : 'Could not refresh sync progress.')
+        })
+    }
+    const interval = window.setInterval(poll, 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [syncActive, dashboard?.sync.id])
+
+  useEffect(() => {
+    if (!activityRequestKey) return
+    const controller = new AbortController()
+    getActivity(
+      { groupBy, metric, ownerId, repositoryId },
+      controller.signal,
+    )
+      .then((data) => setActivityResult({ key: activityRequestKey, data }))
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setDashboardError(error instanceof Error ? error.message : 'Could not load activity history.')
+      })
+    return () => controller.abort()
+  }, [activityRequestKey, groupBy, metric, ownerId, repositoryId])
+
+  const connect = async (pat: string) => {
+    setSubmitting(true)
+    setModalError(undefined)
+    try {
+      const sync = await startSync(pat)
+      setDashboard((current) => ({ snapshot: current?.snapshot ?? null, sync }))
+      setDashboardError(undefined)
+      setModalOpen(false)
+    } catch (error) {
+      setModalError(error instanceof Error ? error.message : 'Could not start the sync.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100 sm:px-10">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-12">
-        <header className="max-w-3xl">
-          <div className="mb-5 inline-flex items-center rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-sm font-medium text-cyan-300">
-            Gait starter
-          </div>
-          <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-6xl">
-            React and Go, ready to move.
-          </h1>
-          <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-300">
-            A clean foundation for a typed React frontend and Go API, built and
-            served together from one production container.
-          </p>
-        </header>
+    <main className="min-h-screen bg-slate-950 text-slate-100">
+      <div className="page-glow" aria-hidden="true" />
+      {dashboard?.snapshot ? (
+        <DashboardView
+          snapshot={dashboard.snapshot}
+          sync={dashboard.sync}
+          activity={activityResult?.data ?? null}
+          activityLoading={activityResult?.key !== activityRequestKey}
+          groupBy={groupBy}
+          metric={metric}
+          ownerId={ownerId}
+          repositoryId={repositoryId}
+          onGroupByChange={setGroupBy}
+          onMetricChange={setMetric}
+          onOwnerChange={setOwnerId}
+          onRepositoryChange={setRepositoryId}
+          onRefresh={() => {
+            setModalError(undefined)
+            setModalOpen(true)
+          }}
+        />
+      ) : (
+        <EmptyDashboard
+          loading={loadingDashboard}
+          error={dashboardError}
+          active={syncActive}
+          message={dashboard?.sync.message}
+          completed={dashboard?.sync.completed_repositories ?? 0}
+          total={dashboard?.sync.total_repositories ?? 0}
+          onTryAgain={() => setModalOpen(true)}
+        />
+      )}
 
-        <ApiStatus />
+      {dashboardError && dashboard?.snapshot && (
+        <div role="alert" className="fixed bottom-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-xl border border-rose-400/20 bg-slate-900 px-4 py-3 text-sm text-rose-200 shadow-2xl">
+          <TriangleAlert aria-hidden="true" className="size-4" />
+          {dashboardError}
+        </div>
+      )}
 
-        <section aria-labelledby="stack-heading">
-          <h2 id="stack-heading" className="sr-only">
-            Included stack
-          </h2>
-          <div className="grid gap-4 md:grid-cols-3">
-            {stack.map(({ name, description, icon: Icon }) => (
-              <article
-                key={name}
-                className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-sm"
-              >
-                <Icon aria-hidden="true" className="size-6 text-cyan-300" />
-                <h3 className="mt-4 font-semibold text-white">{name}</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-400">
-                  {description}
-                </p>
-              </article>
-            ))}
-          </div>
-        </section>
-      </div>
+      <TokenModal
+        open={modalOpen}
+        hasCachedData={Boolean(dashboard?.snapshot)}
+        submitting={submitting}
+        error={modalError}
+        onSubmit={connect}
+        onViewCached={() => {
+          setModalError(undefined)
+          setModalOpen(false)
+        }}
+      />
     </main>
+  )
+}
+
+function EmptyDashboard({
+  loading,
+  error,
+  active,
+  message,
+  completed,
+  total,
+  onTryAgain,
+}: {
+  loading: boolean
+  error?: string
+  active: boolean
+  message?: string
+  completed: number
+  total: number
+  onTryAgain: () => void
+}) {
+  return (
+    <div className="relative mx-auto grid min-h-screen max-w-2xl place-items-center px-6 py-20 text-center">
+      <div>
+        <div className="mx-auto grid size-16 place-items-center rounded-3xl bg-cyan-300 text-slate-950 shadow-2xl shadow-cyan-400/15">
+          {active || loading ? <LoaderCircle aria-hidden="true" className="size-8 animate-spin" /> : <Activity aria-hidden="true" className="size-8" />}
+        </div>
+        <h1 className="mt-7 text-4xl font-semibold tracking-tight text-white">Your Git history, in motion.</h1>
+        <p className="mx-auto mt-4 max-w-lg text-base leading-7 text-slate-400">
+          {active
+            ? message || 'Discovering repositories and building your first dashboard.'
+            : error || 'Connect GitHub to build an all-time view of repositories, contributors, commits, and pull requests.'}
+        </p>
+        {active && total > 0 && (
+          <div className="mx-auto mt-7 max-w-sm">
+            <div className="mb-2 flex justify-between text-xs text-slate-500"><span>Repository progress</span><span>{completed} / {total}</span></div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-cyan-300 transition-[width]" style={{ width: `${Math.round((completed / total) * 100)}%` }} /></div>
+          </div>
+        )}
+        {!active && error && (
+          <button type="button" onClick={onTryAgain} className="mt-7 inline-flex items-center gap-2 rounded-xl bg-cyan-300 px-5 py-2.5 text-sm font-semibold text-slate-950">
+            <RefreshCw aria-hidden="true" className="size-4" /> Try again
+          </button>
+        )}
+        {!active && !error && !loading && (
+          <div className="mt-8 inline-flex items-center gap-2 text-xs text-slate-600"><Database aria-hidden="true" className="size-4" /> Persistent, local statistics cache</div>
+        )}
+      </div>
+    </div>
   )
 }
 

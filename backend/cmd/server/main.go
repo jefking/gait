@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/jefking/gait/backend/internal/api"
+	"github.com/jefking/gait/backend/internal/dashboard"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -25,10 +27,20 @@ func main() {
 func run() error {
 	port := envOrDefault("PORT", "8080")
 	staticDir := envOrDefault("STATIC_DIR", "../frontend/dist")
+	dataDir := envOrDefault("DATA_DIR", "./data")
+	concurrency := envPositiveInteger("SYNC_CONCURRENCY", 4)
+	manager, err := dashboard.NewManager(dashboard.ManagerConfig{
+		DataDir:     dataDir,
+		Concurrency: concurrency,
+	})
+	if err != nil {
+		return err
+	}
+	defer manager.Close()
 
 	server := &http.Server{
 		Addr:              ":" + port,
-		Handler:           api.NewRouter(staticDir),
+		Handler:           api.NewRouter(staticDir, manager),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -65,7 +77,7 @@ func run() error {
 		return err
 	}
 
-	err := <-serverErrors
+	err = <-serverErrors
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
@@ -79,4 +91,12 @@ func envOrDefault(name, fallback string) string {
 	}
 
 	return fallback
+}
+
+func envPositiveInteger(name string, fallback int) int {
+	value, err := strconv.Atoi(os.Getenv(name))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }

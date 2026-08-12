@@ -5,6 +5,7 @@ frontend/dist/
 # Go build and test output
 backend/bin/
 backend/coverage.out
+backend/data/
 
 # Local configuration
 .env
