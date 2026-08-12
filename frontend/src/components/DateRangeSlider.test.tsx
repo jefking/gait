@@ -56,6 +56,8 @@ describe('DateRangeSlider', () => {
     expect(change).toHaveBeenLastCalledWith('2025-01-04', '2025-01-10')
     fireEvent.click(screen.getByRole('button', { name: '31 days' }))
     expect(change).toHaveBeenLastCalledWith('2024-12-11', '2025-01-10')
+    fireEvent.click(screen.getByRole('button', { name: '6 months' }))
+    expect(change).toHaveBeenLastCalledWith('2024-07-10', '2025-01-10')
     fireEvent.click(screen.getByRole('button', { name: '1 year' }))
     expect(change).toHaveBeenLastCalledWith('2024-01-10', '2025-01-10')
   })
@@ -74,5 +76,22 @@ describe('DateRangeSlider', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: '31 days' }))
     expect(change).toHaveBeenLastCalledWith('2025-01-05', '2025-01-10')
+  })
+
+  it('clamps six calendar months to the last valid day', () => {
+    const change = vi.fn()
+    render(
+      <DateRangeSlider
+        availableFrom="2024-01-01"
+        availableTo="2024-08-31"
+        from="2024-01-01"
+        to="2024-08-31"
+        granularity="week"
+        onChange={change}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '6 months' }))
+    expect(change).toHaveBeenLastCalledWith('2024-02-29', '2024-08-31')
   })
 })

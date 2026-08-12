@@ -67,6 +67,42 @@ func TestKnownAgentNamesRequireTrailerEvidence(t *testing.T) {
 	}
 }
 
+func TestInsightQueryDefaultsToSixMonthsOfHistory(t *testing.T) {
+	reports := map[int64]RepositoryReport{1: {
+		Repository: Repository{ID: 1},
+		Commits: CommitStats{Events: []CommitEvent{
+			{Hash: "old", CommittedAt: time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC)},
+			{Hash: "new", CommittedAt: time.Date(2025, time.January, 31, 0, 0, 0, 0, time.UTC)},
+		}},
+	}}
+
+	_, meta, err := prepareInsightQuery(reports, InsightQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.AvailableFrom != "2024-01-31" || meta.From != "2024-07-31" || meta.To != "2025-01-31" {
+		t.Fatalf("expected six-month default within full bounds, got %+v", meta)
+	}
+}
+
+func TestInsightQuerySixMonthDefaultClampsToShorterMonth(t *testing.T) {
+	reports := map[int64]RepositoryReport{1: {
+		Repository: Repository{ID: 1},
+		Commits: CommitStats{Events: []CommitEvent{
+			{Hash: "old", CommittedAt: time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)},
+			{Hash: "new", CommittedAt: time.Date(2024, time.August, 31, 0, 0, 0, 0, time.UTC)},
+		}},
+	}}
+
+	_, meta, err := prepareInsightQuery(reports, InsightQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.From != "2024-02-29" {
+		t.Fatalf("expected calendar-month clamping, got %s", meta.From)
+	}
+}
+
 func TestNetworkCapsCanvasPayloadAndReportsTotalIdentityCount(t *testing.T) {
 	at := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
 	events := make([]CommitEvent, 0, 80)

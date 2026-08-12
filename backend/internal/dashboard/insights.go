@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	defaultSessionHours = 72
-	defaultWindowDays   = 30
-	maximumNetworkNodes = 75
+	defaultSessionHours  = 72
+	defaultWindowDays    = 30
+	defaultHistoryMonths = 6
+	maximumNetworkNodes  = 75
 )
 
 type ActorKind string
@@ -423,11 +424,16 @@ func prepareInsightQuery(reports map[int64]RepositoryReport, query InsightQuery)
 		return query, meta, nil
 	}
 	selectedFrom, selectedTo := availableFrom, availableTo
-	if query.From != nil && query.From.After(selectedFrom) {
-		selectedFrom = *query.From
-	}
 	if query.To != nil && query.To.Before(selectedTo) {
 		selectedTo = *query.To
+	}
+	if query.From == nil {
+		defaultFrom := addMonthsClamped(selectedTo, -defaultHistoryMonths)
+		if defaultFrom.After(selectedFrom) {
+			selectedFrom = defaultFrom
+		}
+	} else if query.From.After(selectedFrom) {
+		selectedFrom = *query.From
 	}
 	if selectedFrom.After(selectedTo) {
 		return query, InsightMeta{}, errors.New("selected date range does not overlap available data")
@@ -453,6 +459,16 @@ func prepareInsightQuery(reports map[int64]RepositoryReport, query InsightQuery)
 		}
 	}
 	return query, meta, nil
+}
+
+func addMonthsClamped(date time.Time, months int) time.Time {
+	firstOfTarget := time.Date(date.Year(), date.Month()+time.Month(months), 1, 0, 0, 0, 0, time.UTC)
+	lastDay := firstOfTarget.AddDate(0, 1, -1).Day()
+	day := date.Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(firstOfTarget.Year(), firstOfTarget.Month(), day, 0, 0, 0, 0, time.UTC)
 }
 
 func insightBounds(reports map[int64]RepositoryReport, query InsightQuery) (time.Time, time.Time) {
