@@ -17,6 +17,15 @@ type DashboardService interface {
 	Subscribe(context.Context) <-chan dashboard.DashboardEvent
 }
 
+type InsightsService interface {
+	InsightOverview(dashboard.InsightQuery) (dashboard.OverviewResponse, error)
+	InsightNetwork(dashboard.InsightQuery) (dashboard.NetworkResponse, error)
+	InsightRamps(dashboard.InsightQuery) (dashboard.RampResponse, error)
+	InsightRankings(dashboard.InsightQuery) (dashboard.RankingResponse, error)
+	Identities() dashboard.IdentityResponse
+	UpdateIdentity(string, dashboard.IdentityOverride) (dashboard.IdentityResponse, error)
+}
+
 // NewRouter creates the application router. API routes are registered before
 // the static fallback so they can never be mistaken for frontend routes.
 func NewRouter(staticDir string, services ...DashboardService) http.Handler {
@@ -31,6 +40,14 @@ func NewRouter(staticDir string, services ...DashboardService) http.Handler {
 		service := services[0]
 		router.Get("/api/dashboard", dashboardHandler(service))
 		router.Get("/api/activity", activityHandler(service))
+		if insights, ok := service.(InsightsService); ok {
+			router.Get("/api/insights/overview", overviewHandler(insights))
+			router.Get("/api/insights/network", networkHandler(insights))
+			router.Get("/api/insights/ramps", rampsHandler(insights))
+			router.Get("/api/insights/rankings", rankingsHandler(insights))
+			router.Get("/api/identities", identitiesHandler(insights))
+			router.Patch("/api/identities/{key}", updateIdentityHandler(insights))
+		}
 		router.Get("/api/events", eventsHandler(service))
 		router.Post("/api/sync", syncHandler(service))
 	}

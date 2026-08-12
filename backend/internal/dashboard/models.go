@@ -257,13 +257,21 @@ type Repository struct {
 }
 
 type PullRequest struct {
-	Number    int64      `json:"number"`
-	State     string     `json:"state"`
-	MergedAt  *time.Time `json:"merged_at,omitempty"`
-	ClosedAt  *time.Time `json:"closed_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	Author    Person     `json:"author"`
+	Number    int64               `json:"number"`
+	State     string              `json:"state"`
+	MergedAt  *time.Time          `json:"merged_at,omitempty"`
+	ClosedAt  *time.Time          `json:"closed_at,omitempty"`
+	CreatedAt time.Time           `json:"created_at"`
+	UpdatedAt time.Time           `json:"updated_at"`
+	Author    Person              `json:"author"`
+	Reviews   []PullRequestReview `json:"reviews,omitempty"`
+}
+
+type PullRequestReview struct {
+	ID          int64      `json:"id"`
+	State       string     `json:"state"`
+	SubmittedAt *time.Time `json:"submitted_at,omitempty"`
+	Author      Person     `json:"author"`
 }
 
 type Person struct {
@@ -274,6 +282,7 @@ type Person struct {
 }
 
 type PullCache struct {
+	Version      int           `json:"version,omitempty"`
 	Checkpoint   time.Time     `json:"checkpoint"`
 	PullRequests []PullRequest `json:"pull_requests"`
 }
@@ -301,6 +310,32 @@ type CommitStats struct {
 	FirstAt      time.Time
 	Contributors map[string]ContributorMetrics
 	Daily        map[string]map[string]int
+	Events       []CommitEvent
+}
+
+// CommitEvent retains the event-level evidence needed by relationship and
+// longitudinal analysis. CommitStats still carries its legacy aggregates so
+// cached dashboards and the /api/activity endpoint remain compatible.
+type CommitEvent struct {
+	Hash              string               `json:"hash"`
+	CommittedAt       time.Time            `json:"committed_at"`
+	Author            ContributorMetrics   `json:"author"`
+	Message           string               `json:"message"`
+	Parents           []string             `json:"parents,omitempty"`
+	Paths             []string             `json:"paths,omitempty"`
+	Participants      []ContributorMetrics `json:"participants,omitempty"`
+	ExplicitRevert    bool                 `json:"explicit_revert,omitempty"`
+	FilesChanged      int                  `json:"files_changed"`
+	LinesAdded        int                  `json:"lines_added"`
+	LinesDeleted      int                  `json:"lines_deleted"`
+	RetainedLines     int                  `json:"retained_lines,omitempty"`
+	RetentionMeasured bool                 `json:"retention_measured,omitempty"`
+	RetentionDays     int                  `json:"retention_days,omitempty"`
+}
+
+type AnalysisCache struct {
+	Version int           `json:"version"`
+	Events  []CommitEvent `json:"events"`
 }
 
 type PullStats struct {
@@ -308,6 +343,7 @@ type PullStats struct {
 	LastAt       time.Time
 	Contributors map[string]ContributorMetrics
 	Daily        map[string]map[string]int
+	PullRequests []PullRequest
 }
 
 type RepositoryReport struct {

@@ -13,11 +13,14 @@ import (
 )
 
 type fakeDashboardService struct {
-	response dashboard.DashboardResponse
-	started  string
-	startErr error
-	query    dashboard.ActivityQuery
-	events   chan dashboard.DashboardEvent
+	response         dashboard.DashboardResponse
+	started          string
+	startErr         error
+	query            dashboard.ActivityQuery
+	events           chan dashboard.DashboardEvent
+	insightQuery     dashboard.InsightQuery
+	identityKey      string
+	identityOverride dashboard.IdentityOverride
 }
 
 func (service *fakeDashboardService) Dashboard() dashboard.DashboardResponse {
@@ -39,6 +42,31 @@ func (service *fakeDashboardService) Subscribe(context.Context) <-chan dashboard
 		service.events = make(chan dashboard.DashboardEvent)
 	}
 	return service.events
+}
+
+func (service *fakeDashboardService) InsightOverview(query dashboard.InsightQuery) (dashboard.OverviewResponse, error) {
+	service.insightQuery = query
+	return dashboard.OverviewResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, nil
+}
+func (service *fakeDashboardService) InsightNetwork(query dashboard.InsightQuery) (dashboard.NetworkResponse, error) {
+	service.insightQuery = query
+	return dashboard.NetworkResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, nil
+}
+func (service *fakeDashboardService) InsightRamps(query dashboard.InsightQuery) (dashboard.RampResponse, error) {
+	service.insightQuery = query
+	return dashboard.RampResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, nil
+}
+func (service *fakeDashboardService) InsightRankings(query dashboard.InsightQuery) (dashboard.RankingResponse, error) {
+	service.insightQuery = query
+	return dashboard.RankingResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}, Cohort: query.Cohort, Metric: query.Metric}, nil
+}
+func (service *fakeDashboardService) Identities() dashboard.IdentityResponse {
+	return dashboard.IdentityResponse{Identities: []dashboard.IdentitySummary{}}
+}
+func (service *fakeDashboardService) UpdateIdentity(key string, override dashboard.IdentityOverride) (dashboard.IdentityResponse, error) {
+	service.identityKey = key
+	service.identityOverride = override
+	return service.Identities(), nil
 }
 
 func TestStartSyncAPIAcceptsPATWithoutEchoingIt(t *testing.T) {
@@ -93,6 +121,33 @@ func TestActivityAPIRejectsInvalidDate(t *testing.T) {
 	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected bad request, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestInsightAPIParsesSharedFiltersAndRankingSelection(t *testing.T) {
+	service := &fakeDashboardService{}
+	request := httptest.NewRequest(http.MethodGet, "/api/insights/rankings?owner_id=7&repository_id=9&actor_kind=agent&exclude_dead=true&from=2025-01-01&to=2025-02-01&session_hours=48&adoption_days=45&survival_days=60&cohort=human_agent&metric=handoffs", nil)
+	response := httptest.NewRecorder()
+	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected OK, got %d: %s", response.Code, response.Body.String())
+	}
+	query := service.insightQuery
+	if query.OwnerID != 7 || query.RepositoryID != 9 || query.ActorKind != dashboard.ActorAgent || !query.ExcludeDead || query.SessionHours != 48 || query.AdoptionDays != 45 || query.SurvivalDays != 60 || query.Cohort != "human_agent" || query.Metric != "handoffs" {
+		t.Fatalf("unexpected query: %+v", query)
+	}
+}
+
+func TestIdentityAPIUpdatesAnEncodedIdentity(t *testing.T) {
+	service := &fakeDashboardService{}
+	request := httptest.NewRequest(http.MethodPatch, "/api/identities/github%3Ahelper%5Bbot%5D", bytes.NewBufferString(`{"kind":"agent","display_name":"Helper"}`))
+	response := httptest.NewRecorder()
+	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected OK, got %d: %s", response.Code, response.Body.String())
+	}
+	if service.identityKey != "github:helper[bot]" || service.identityOverride.Kind != dashboard.ActorAgent {
+		t.Fatalf("unexpected update: %q %+v", service.identityKey, service.identityOverride)
 	}
 }
 

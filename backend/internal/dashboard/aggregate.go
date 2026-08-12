@@ -82,6 +82,15 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 			contributor.LastActivityAt = committedAt
 		}
 		stats.Contributors[contributor.Key] = contributor
+		stats.Events = append(stats.Events, CommitEvent{
+			Hash:         record[2],
+			CommittedAt:  committedAt.UTC(),
+			Author:       contributor,
+			Message:      record[5],
+			FilesChanged: filesChanged,
+			LinesAdded:   linesAdded,
+			LinesDeleted: linesDeleted,
+		})
 
 		day := committedAt.UTC().Format(time.DateOnly)
 		if stats.Daily[day] == nil {
@@ -137,6 +146,7 @@ func BuildPullStats(pulls []PullRequest) PullStats {
 	stats := PullStats{
 		Contributors: make(map[string]ContributorMetrics),
 		Daily:        make(map[string]map[string]int),
+		PullRequests: append([]PullRequest(nil), pulls...),
 	}
 	for _, pull := range pulls {
 		login := strings.TrimSpace(pull.Author.Login)

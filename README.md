@@ -1,14 +1,16 @@
 # Gait
 
-Gait is a personal GitHub statistics dashboard. It discovers every repository
+Gait is a Human × Agent engineering intelligence dashboard. It discovers every repository
 visible to a supplied GitHub personal access token, keeps an app-owned clone of
 each repository up to date, analyzes default-branch history with
 [`git-changes-by-day`](https://github.com/moltenbot000/git-changes-by-day), and
 combines the result with GitHub pull request history.
 
-The React dashboard groups repositories by owner or organization and shows
-adaptive daily, weekly, or monthly activity, repository totals, and contributor rankings. The Go
-server performs all GitHub, Git, analysis, caching, and background-job work.
+The graph-first React dashboard classifies evidence-backed human, agent, mixed,
+and unknown work; maps collaboration; compares observed human-to-agent handoffs
+and adoption windows; and shows frequency, quality proxies, repository pulses,
+and metric-led ranks over time. The Go server performs all GitHub, Git,
+relationship analysis, caching, and background-job work.
 
 ## Stack
 
@@ -30,14 +32,16 @@ The server:
 2. Clones new repositories and fetches existing app-owned clones using four
    concurrent workers by default.
 3. Checks out the latest default branch and runs `git-changes-by-day`.
-4. Publishes that repository's commit statistics immediately, then fetches all
-   pull requests on first use and only updated pull requests later.
-5. Publishes the enriched repository again and atomically persists each
+4. Enriches commit events with full messages, parents, and touched paths, then
+   publishes commit statistics immediately.
+5. Fetches pull requests and review evidence on first use and only updated pull
+   requests later.
+6. Publishes the enriched repository again and atomically persists each
    incremental dashboard snapshot.
 
 Repository workers expose their current `updating_git`, `analyzing`,
 `pull_requests`, and `publishing` workflow step. The frontend receives
-server-sent invalidation events and refreshes the canonical dashboard/activity
+server-sent invalidation events and refreshes the canonical dashboard/insight
 APIs as each step completes; slower polling remains as a reconnect fallback.
 
 ### Dead repository classification
@@ -64,8 +68,8 @@ beyond a trusted local network.
 ### PAT access
 
 A fine-grained PAT should grant read access to repository metadata, contents,
-and pull requests for every repository to include. Organization repositories
-may require SSO authorization. A token can only discover repositories that the
+and pull requests (including reviews) for every repository to include.
+Organization repositories may require SSO authorization. A token can only discover repositories that the
 token itself is authorized to access. Repositories without pull-request read
 permission remain visible, with PR statistics marked unavailable.
 
@@ -125,6 +129,12 @@ volume contains only app-owned repository clones and reports—not the PAT.
 | `GET` | `/api/health` | Liveness check |
 | `GET` | `/api/dashboard` | Latest snapshot and current sync status |
 | `GET` | `/api/activity` | Adaptive owner or contributor activity |
+| `GET` | `/api/insights/overview` | Human/agent timeline, quality proxies, coverage, and repository pulse |
+| `GET` | `/api/insights/network` | Evidence-separated collaboration identities and edges |
+| `GET` | `/api/insights/ramps` | Human→agent handoff and repository adoption comparisons |
+| `GET` | `/api/insights/rankings` | Metric-led individual or pair ranks and trajectories |
+| `GET` | `/api/identities` | Detected identity classifications and evidence |
+| `PATCH` | `/api/identities/{key}` | Persist a classification, display, or alias override |
 | `GET` | `/api/events` | Live server-sent dashboard invalidations |
 | `POST` | `/api/sync` | Start a background sync with `{ "pat": "…" }` |
 
@@ -134,6 +144,28 @@ volume contains only app-owned repository clones and reports—not the PAT.
 format. Responses include the oldest/latest available dates and automatically
 use daily buckets for ranges up to 62 days, weekly buckets up to two years,
 and monthly buckets for longer histories.
+
+The insight endpoints share optional `owner_id`, `repository_id`,
+`actor_kind=human|agent|unknown`, `from`, `to`, `session_hours`,
+`adoption_days`, `survival_days`, and `exclude_dead=true|false` filters. Session windows
+accept 1–168 hours; adoption and survival windows accept 7–180 days. Rankings
+also accept `cohort=agents|humans|human_agent|human_human` and a transparent
+metric such as `commits`, `interaction_days`, `handoffs`, or `revert_rate`.
+
+### Attribution and interpretation
+
+Agent attribution uses exact GitHub Bot/App evidence, known agent co-author
+signatures, and user-maintained overrides. It does not guess from prose or code
+style. Git identities that cannot be verified remain `unknown`; work performed
+by an agent under a human identity without a recognizable trailer cannot be
+detected automatically.
+
+Collaboration links come from co-authorship, PR reviews, and alternating commits
+inside a same-repository session. Ramp-up values are observed before/after
+associations, not causal productivity claims. Quality is shown as separate
+proxies—reverts, resolved-PR merge rate, time-to-merge, review coverage, and,
+when enriched maturity analysis is available, retained lines—never as a single
+opaque score.
 
 ## Configuration
 

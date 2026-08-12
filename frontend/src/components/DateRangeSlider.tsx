@@ -1,5 +1,6 @@
+import { brushX, scaleUtc, select, type D3BrushEvent } from 'd3'
 import { CalendarRange } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ActivityGranularity } from '../lib/api'
 
 interface DateRangeSliderProps {
@@ -43,9 +44,6 @@ export function DateRangeSlider({
   const selected = draft.scope === scope ? draft : { scope, start: externalStart, end: externalEnd }
   const selectedFrom = addDays(minimum, selected.start)
   const selectedTo = addDays(minimum, selected.end)
-  const startPercent = totalDays === 0 ? 0 : (selected.start / totalDays) * 100
-  const endPercent = totalDays === 0 ? 100 : (selected.end / totalDays) * 100
-
   const updateStart = (value: number) => {
     setDraft({ scope, start: Math.min(value, selected.end), end: selected.end })
   }
@@ -61,6 +59,29 @@ export function DateRangeSlider({
   }
   const allTimeSelected = formatISODate(selectedFrom) === availableFrom
     && formatISODate(selectedTo) === availableTo
+  const brushRef = useRef<SVGGElement>(null)
+
+  useEffect(() => {
+    if (!brushRef.current || totalDays === 0) return
+    const x = scaleUtc().domain([minimum, maximum]).range([9, 991])
+    const behavior = brushX<unknown>()
+      .extent([[9, 2], [991, 30]])
+      .on('end', (event: D3BrushEvent<unknown>) => {
+        if (!event.sourceEvent || !event.selection) return
+        const [left, right] = event.selection as [number, number]
+        const nextStart = clamp(dayOffset(minimum, x.invert(left)), 0, totalDays)
+        const nextEnd = clamp(dayOffset(minimum, x.invert(right)), nextStart, totalDays)
+        setDraft({ scope, start: nextStart, end: nextEnd })
+        onChange(formatISODate(addDays(minimum, nextStart)), formatISODate(addDays(minimum, nextEnd)))
+      })
+    const group = select(brushRef.current)
+    group.call(behavior)
+    group.call(behavior.move, [x(selectedFrom), x(selectedTo)])
+    group.selectAll('.overlay').attr('fill', 'transparent')
+    group.selectAll('.selection').attr('fill', '#22d3ee').attr('fill-opacity', .28).attr('stroke', '#67e8f9').attr('rx', 7)
+    group.selectAll('.handle').attr('fill', '#67e8f9').attr('stroke', '#0f172a').attr('stroke-width', 3).attr('rx', 5)
+    return () => { group.on('.brush', null) }
+  }, [maximum, minimum, onChange, scope, selected.end, selected.start, selectedFrom, selectedTo, totalDays])
 
   return (
     <section className="mt-6 rounded-2xl border border-white/8 bg-slate-950/45 px-4 py-4 sm:px-5">
@@ -110,11 +131,10 @@ export function DateRangeSlider({
       </div>
 
       <div className="relative mt-4 h-8" data-testid="date-range-slider">
-        <div className="absolute left-0 right-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/8" />
-        <div
-          className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-cyan-300"
-          style={{ left: `${startPercent}%`, right: `${100 - endPercent}%` }}
-        />
+        <svg viewBox="0 0 1000 32" preserveAspectRatio="none" className="absolute inset-0 h-8 w-full" aria-hidden="true">
+          <line x1="9" x2="991" y1="16" y2="16" stroke="rgba(255,255,255,.1)" strokeWidth="6" strokeLinecap="round" />
+          <g ref={brushRef} />
+        </svg>
         <input
           type="range"
           aria-label="Oldest activity date"

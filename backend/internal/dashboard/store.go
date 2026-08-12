@@ -45,6 +45,10 @@ func (store *Store) pullPath(repositoryID int64) string {
 	return filepath.Join(store.reportDir(repositoryID), "pulls.json")
 }
 
+func (store *Store) analysisPath(repositoryID int64) string {
+	return filepath.Join(store.reportDir(repositoryID), "analysis.json")
+}
+
 func (store *Store) NewCommitTemp(repositoryID int64) (*os.File, error) {
 	directory := store.reportDir(repositoryID)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -98,6 +102,23 @@ func (store *Store) SavePullCache(repositoryID int64, cache PullCache) error {
 	return store.writeJSON(store.pullPath(repositoryID), cache)
 }
 
+func (store *Store) LoadAnalysisCache(repositoryID int64) (AnalysisCache, error) {
+	var cache AnalysisCache
+	file, err := os.Open(store.analysisPath(repositoryID))
+	if err != nil {
+		return cache, err
+	}
+	defer file.Close()
+	if err := json.NewDecoder(file).Decode(&cache); err != nil {
+		return AnalysisCache{}, fmt.Errorf("decode enriched analysis cache: %w", err)
+	}
+	return cache, nil
+}
+
+func (store *Store) SaveAnalysisCache(repositoryID int64, events []CommitEvent) error {
+	return store.writeJSON(store.analysisPath(repositoryID), AnalysisCache{Version: 2, Events: events})
+}
+
 func (store *Store) LoadSnapshot() (*Snapshot, error) {
 	file, err := os.Open(filepath.Join(store.root, "snapshot.json"))
 	if err != nil {
@@ -118,6 +139,26 @@ func (store *Store) SaveSnapshot(snapshot *Snapshot) error {
 	return store.writeJSON(filepath.Join(store.root, "snapshot.json"), snapshot)
 }
 
+func (store *Store) LoadIdentityOverrides() (map[string]IdentityOverride, error) {
+	overrides := make(map[string]IdentityOverride)
+	file, err := os.Open(filepath.Join(store.root, "identities.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return overrides, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open identity overrides: %w", err)
+	}
+	defer file.Close()
+	if err := json.NewDecoder(file).Decode(&overrides); err != nil {
+		return nil, fmt.Errorf("decode identity overrides: %w", err)
+	}
+	return overrides, nil
+}
+
+func (store *Store) SaveIdentityOverrides(overrides map[string]IdentityOverride) error {
+	return store.writeJSON(filepath.Join(store.root, "identities.json"), overrides)
+}
+
 func (store *Store) LoadReports(snapshot *Snapshot) (map[int64]RepositoryReport, []string) {
 	reports := make(map[int64]RepositoryReport)
 	if snapshot == nil {
@@ -136,6 +177,16 @@ func (store *Store) LoadReports(snapshot *Snapshot) (map[int64]RepositoryReport,
 			warnings = append(warnings, fmt.Sprintf("%s: cached commit report could not be loaded", repository.FullName))
 		} else if err == nil {
 			report.Commits = commits
+			// The legacy CSV contains enough data to rebuild aggregate totals but
+			// not the full messages and evidence required for relationships.
+			report.Commits.Events = nil
+			if enriched, loadErr := store.LoadAnalysisCache(repository.ID); loadErr == nil && enriched.Version == 2 {
+				report.Commits.Events = enriched.Events
+			} else if loadErr == nil {
+				warnings = append(warnings, fmt.Sprintf("%s: enriched analysis cache version requires refresh", repository.FullName))
+			} else if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+				warnings = append(warnings, fmt.Sprintf("%s: enriched analysis cache could not be loaded", repository.FullName))
+			}
 		}
 		if summary.PullRequests != nil {
 			cache, loadErr := store.LoadPullCache(repository.ID)

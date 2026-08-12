@@ -94,16 +94,15 @@ describe('App', () => {
     render(<App />)
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(await screen.findByText('Owners and repositories')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'hello-world' })).toBeInTheDocument()
-    expect(screen.getByLabelText(/Dead repository/)).toBeInTheDocument()
-    expect(screen.queryByText('Dead')).not.toBeInTheDocument()
+    expect(await screen.findByText('Team constellation')).toBeInTheDocument()
+    expect(screen.getByText('Human × Agent intelligence')).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'hello-world' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'GitHub settings' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Projects' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Exclude dead projects' }))
-    expect(screen.getByRole('link', { name: 'hello-world' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'hello-world' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
-    expect(screen.queryByRole('link', { name: 'hello-world' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'hello-world' })).not.toBeInTheDocument()
     expect(screen.getByText('All repositories are excluded by project settings.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Export PDF/ }))
     expect(print).toHaveBeenCalledOnce()
@@ -139,32 +138,30 @@ describe('App', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('does not graph stale activity when a filtered request fails', async () => {
+  it('does not graph stale insights when a dead-project filtered request fails', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url === '/api/dashboard') return jsonResponse(cachedDashboard)
-      if (url.includes('exclude_dead=true')) throw new Error('Filtered activity failed')
-      if (url.startsWith('/api/activity')) {
-        return jsonResponse({
-          group_by: 'owner',
-          metric: 'commits',
-          series: [{ key: 'dead', label: 'Dead project activity', total: 2, points: [{ date: '2025-01-01', value: 2 }] }],
-        })
-      }
+      if (url.includes('exclude_dead=true')) throw new Error('Filtered insights failed')
+      if (url.startsWith('/api/insights/overview')) return jsonResponse(emptyOverview)
+      if (url.startsWith('/api/insights/network')) return jsonResponse({ meta: emptyOverview.meta, nodes: [], edges: [], total_identities: 0 })
+      if (url.startsWith('/api/insights/ramps')) return jsonResponse({ meta: emptyOverview.meta, handoffs: [], adoptions: [] })
+      if (url.startsWith('/api/insights/rankings')) return jsonResponse({ meta: emptyOverview.meta, cohort: 'agents', metric: 'commits', favorable_direction: 'higher', leaderboard: [{ key: 'dead', label: 'Dead project activity', rank: 1, value: 2, eligible: true, metrics: { commits: 2 } }], trajectories: [] })
+      if (url === '/api/identities') return jsonResponse({ identities: [] })
       return jsonResponse({ error: 'not found' }, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
-    expect(await screen.findByRole('button', { name: /Dead project activity/ })).toBeInTheDocument()
+    expect(await screen.findByText('Dead project activity')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'GitHub settings' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Projects' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Exclude dead projects' }))
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Filtered activity failed')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Filtered insights failed')
     expect(screen.queryByText('Dead project activity')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Loading activity chart')).toBeInTheDocument()
+    expect(screen.getByLabelText('Loading rank trajectories')).toBeInTheDocument()
   })
 })
 
@@ -172,9 +169,11 @@ function mockAPI(dashboard: DashboardResponse = cachedDashboard) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url === '/api/dashboard') return jsonResponse(dashboard)
-    if (url.startsWith('/api/activity')) {
-      return jsonResponse({ group_by: 'owner', metric: 'commits', series: [] })
-    }
+    if (url.startsWith('/api/insights/overview')) return jsonResponse(emptyOverview)
+    if (url.startsWith('/api/insights/network')) return jsonResponse({ meta: emptyOverview.meta, nodes: [], edges: [], total_identities: 0 })
+    if (url.startsWith('/api/insights/ramps')) return jsonResponse({ meta: emptyOverview.meta, handoffs: [], adoptions: [] })
+    if (url.startsWith('/api/insights/rankings')) return jsonResponse({ meta: emptyOverview.meta, cohort: 'agents', metric: 'commits', favorable_direction: 'higher', leaderboard: [], trajectories: [] })
+    if (url === '/api/identities') return jsonResponse({ identities: [] })
     if (url === '/api/sync' && init?.method === 'POST') {
       return jsonResponse({
         sync: {
@@ -189,6 +188,15 @@ function mockAPI(dashboard: DashboardResponse = cachedDashboard) {
     }
     return jsonResponse({ error: 'not found' }, 404)
   })
+}
+
+const emptyOverview = {
+  meta: {
+    available_from: '2024-01-01', available_to: '2025-01-01', from: '2024-01-01', to: '2025-01-01', granularity: 'week', session_hours: 72, adoption_days: 30, survival_days: 30,
+    coverage: { total_commits: 0, classified_commits: 0, unknown_commits: 0, classification_rate: 0, mature_commits: 0, eligible_pull_requests: 0, reviewed_pull_requests: 0 },
+  },
+  summary: { agent_participation: 0, handoff_episodes: 0, strongest_pair_days: 0 },
+  timeline: [], quality: [], repositories: [],
 }
 
 function jsonResponse(value: unknown, status = 200) {

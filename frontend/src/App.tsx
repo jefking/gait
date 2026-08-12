@@ -3,15 +3,19 @@ import { useCallback, useEffect, useState } from 'react'
 import { DashboardView } from './components/DashboardView'
 import { TokenModal } from './components/TokenModal'
 import {
-  getActivity,
   getDashboard,
+  getIdentities,
+  getInsights,
   isSyncActive,
   startSync,
   subscribeToDashboardEvents,
-  type ActivityGroup,
-  type ActivityMetric,
-  type ActivityResponse,
   type DashboardResponse,
+  type ActorKind,
+  type InsightBundle,
+  type IdentitySummary,
+  type RankCohort,
+  type RankMetric,
+  updateIdentity as updateIdentityClassification,
 } from './lib/api'
 
 function App() {
@@ -23,15 +27,19 @@ function App() {
   const [modalError, setModalError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
 
-  const [groupBy, setGroupBy] = useState<ActivityGroup>('owner')
-  const [metric, setMetric] = useState<ActivityMetric>('commits')
   const [ownerId, setOwnerId] = useState<number>()
   const [repositoryId, setRepositoryId] = useState<number>()
   const [excludeDead, setExcludeDead] = useState(false)
+  const [actorKind, setActorKind] = useState<ActorKind>()
   const [dateRange, setDateRange] = useState<{ from: string; to: string; userSelected: boolean }>()
-  const [activityResult, setActivityResult] = useState<{
+  const [windows, setWindows] = useState({ sessionHours: 72, adoptionDays: 30, survivalDays: 30 })
+  const [rankCohort, setRankCohort] = useState<RankCohort>('agents')
+  const [rankMetric, setRankMetric] = useState<RankMetric>('commits')
+  const [insightEpoch, setInsightEpoch] = useState(0)
+  const [identities, setIdentities] = useState<IdentitySummary[]>([])
+  const [insightResult, setInsightResult] = useState<{
     key: string
-    data: ActivityResponse
+    data: InsightBundle
   }>()
 
   const applyDashboard = useCallback((response: DashboardResponse) => {
@@ -64,16 +72,16 @@ function App() {
   const syncActive = dashboard ? isSyncActive(dashboard.sync) : false
   const selectedFrom = dateRange?.userSelected ? dateRange.from : undefined
   const selectedTo = dateRange?.userSelected ? dateRange.to : undefined
-  const activityRequestKey = dashboard?.snapshot
-    ? [dashboard.snapshot.generated_at, groupBy, metric, ownerId ?? '', repositoryId ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? ''].join(':')
+  const insightRequestKey = dashboard?.snapshot
+    ? [dashboard.snapshot.generated_at, insightEpoch, ownerId ?? '', repositoryId ?? '', actorKind ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? '', windows.sessionHours, windows.adoptionDays, windows.survivalDays, rankCohort, rankMetric].join(':')
     : ''
-  const currentActivity = activityResult?.key === activityRequestKey ? activityResult.data : null
 
   useEffect(() => {
     let cancelled = false
     let refreshTimer: number | undefined
     let controller: AbortController | undefined
     const unsubscribe = subscribeToDashboardEvents(() => {
+      setInsightEpoch((current) => current + 1)
       window.clearTimeout(refreshTimer)
       refreshTimer = window.setTimeout(() => {
         controller?.abort()
@@ -117,25 +125,27 @@ function App() {
   }, [applyDashboard, syncActive, dashboard?.sync.id])
 
   useEffect(() => {
-    if (!activityRequestKey) return
+    if (!insightRequestKey) return
     const controller = new AbortController()
-    getActivity(
-      { groupBy, metric, ownerId, repositoryId, excludeDead, from: selectedFrom, to: selectedTo },
+    getInsights(
+      { ownerId, repositoryId, actorKind, excludeDead, from: selectedFrom, to: selectedTo, ...windows },
+      rankCohort,
+      rankMetric,
       controller.signal,
     )
       .then((data) => {
-        setActivityResult({ key: activityRequestKey, data })
-        if (data.available_from && data.available_to) {
+        setInsightResult({ key: insightRequestKey, data })
+        if (data.overview.meta.available_from && data.overview.meta.available_to) {
           setDateRange((current) =>
             current?.userSelected
               ? {
-                  from: data.from ?? current.from,
-                  to: data.to ?? current.to,
+                  from: data.overview.meta.from ?? current.from,
+                  to: data.overview.meta.to ?? current.to,
                   userSelected: true,
                 }
               : {
-                  from: data.available_from!,
-                  to: data.available_to!,
+                  from: data.overview.meta.available_from!,
+                  to: data.overview.meta.available_to!,
                   userSelected: false,
                 },
           )
@@ -143,10 +153,19 @@ function App() {
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        setDashboardError(error instanceof Error ? error.message : 'Could not load activity history.')
+        setDashboardError(error instanceof Error ? error.message : 'Could not load Human × Agent insights.')
       })
     return () => controller.abort()
-  }, [activityRequestKey, groupBy, metric, ownerId, repositoryId, excludeDead, selectedFrom, selectedTo])
+  }, [insightRequestKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows, rankCohort, rankMetric])
+
+  useEffect(() => {
+    if (!dashboard?.snapshot) return
+    const controller = new AbortController()
+    getIdentities(controller.signal).then((result) => setIdentities(result.identities)).catch((error: unknown) => {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) setDashboardError(error instanceof Error ? error.message : 'Could not load identities.')
+    })
+    return () => controller.abort()
+  }, [dashboard?.snapshot, insightEpoch])
 
   const connect = async (pat: string) => {
     setSubmitting(true)
@@ -170,20 +189,35 @@ function App() {
         <DashboardView
           snapshot={dashboard.snapshot}
           sync={dashboard.sync}
-          activity={currentActivity}
-          activityLoading={!currentActivity}
-          groupBy={groupBy}
-          metric={metric}
+          insights={insightResult?.data ?? null}
+          insightsLoading={insightResult?.key !== insightRequestKey}
+          identities={identities}
           ownerId={ownerId}
           repositoryId={repositoryId}
+          actorKind={actorKind}
           excludeDead={excludeDead}
           dateFrom={dateRange?.from}
           dateTo={dateRange?.to}
-          onGroupByChange={setGroupBy}
-          onMetricChange={setMetric}
+          sessionHours={windows.sessionHours}
+          adoptionDays={windows.adoptionDays}
+          survivalDays={windows.survivalDays}
+          rankCohort={rankCohort}
+          rankMetric={rankMetric}
           onOwnerChange={setOwnerId}
           onRepositoryChange={setRepositoryId}
+          onActorKindChange={(kind) => {
+            setActorKind(kind)
+            if (kind === 'human') { setRankCohort('humans'); setRankMetric('commits') }
+            if (kind === 'agent') { setRankCohort('agents'); setRankMetric('commits') }
+          }}
           onDateRangeChange={(from, to) => setDateRange({ from, to, userSelected: true })}
+          onWindowsChange={setWindows}
+          onRankChange={(cohort, metric) => { setRankCohort(cohort); setRankMetric(metric) }}
+          onIdentityChange={(key, update) => {
+            void updateIdentityClassification(key, update)
+              .then((result) => { setIdentities(result.identities); setInsightEpoch((current) => current + 1) })
+              .catch((error: unknown) => setDashboardError(error instanceof Error ? error.message : 'Could not update identity.'))
+          }}
           onRefresh={() => {
             setModalError(undefined)
             setModalMode('settings')

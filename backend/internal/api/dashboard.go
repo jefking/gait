@@ -6,12 +6,157 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jefking/gait/backend/internal/dashboard"
 )
+
+func overviewHandler(service InsightsService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		query, err := parseInsightQuery(request)
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		result, err := service.InsightOverview(query)
+		writeInsightResponse(response, result, err)
+	}
+}
+
+func networkHandler(service InsightsService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		query, err := parseInsightQuery(request)
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		result, err := service.InsightNetwork(query)
+		writeInsightResponse(response, result, err)
+	}
+}
+
+func rampsHandler(service InsightsService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		query, err := parseInsightQuery(request)
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		result, err := service.InsightRamps(query)
+		writeInsightResponse(response, result, err)
+	}
+}
+
+func rankingsHandler(service InsightsService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		query, err := parseInsightQuery(request)
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		query.Cohort, query.Metric = request.URL.Query().Get("cohort"), request.URL.Query().Get("metric")
+		result, err := service.InsightRankings(query)
+		writeInsightResponse(response, result, err)
+	}
+}
+
+func identitiesHandler(service InsightsService) http.HandlerFunc {
+	return func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Cache-Control", "no-store")
+		writeJSONValue(response, http.StatusOK, service.Identities())
+	}
+}
+
+func updateIdentityHandler(service InsightsService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		key, err := url.PathUnescape(chi.URLParam(request, "key"))
+		if err != nil || strings.TrimSpace(key) == "" {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "identity key is required"})
+			return
+		}
+		request.Body = http.MaxBytesReader(response, request.Body, 16<<10)
+		decoder := json.NewDecoder(request.Body)
+		decoder.DisallowUnknownFields()
+		var override dashboard.IdentityOverride
+		if err := decoder.Decode(&override); err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "request must contain an identity override"})
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "request must contain one JSON object"})
+			return
+		}
+		result, err := service.UpdateIdentity(key, override)
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		response.Header().Set("Cache-Control", "no-store")
+		writeJSONValue(response, http.StatusOK, result)
+	}
+}
+
+func parseInsightQuery(request *http.Request) (dashboard.InsightQuery, error) {
+	query := dashboard.InsightQuery{ActorKind: dashboard.ActorKind(request.URL.Query().Get("actor_kind"))}
+	var err error
+	query.ExcludeDead, err = optionalBool(request.URL.Query().Get("exclude_dead"))
+	if err != nil {
+		return query, errors.New("exclude_dead must be true or false")
+	}
+	query.OwnerID, err = optionalPositiveInt64(request.URL.Query().Get("owner_id"))
+	if err != nil {
+		return query, errors.New("owner_id must be a positive integer")
+	}
+	query.RepositoryID, err = optionalPositiveInt64(request.URL.Query().Get("repository_id"))
+	if err != nil {
+		return query, errors.New("repository_id must be a positive integer")
+	}
+	query.From, err = optionalDate(request.URL.Query().Get("from"))
+	if err != nil {
+		return query, errors.New("from must use YYYY-MM-DD")
+	}
+	query.To, err = optionalDate(request.URL.Query().Get("to"))
+	if err != nil {
+		return query, errors.New("to must use YYYY-MM-DD")
+	}
+	query.SessionHours, err = optionalInteger(request.URL.Query().Get("session_hours"))
+	if err != nil {
+		return query, errors.New("session_hours must be an integer")
+	}
+	query.AdoptionDays, err = optionalInteger(request.URL.Query().Get("adoption_days"))
+	if err != nil {
+		return query, errors.New("adoption_days must be an integer")
+	}
+	query.SurvivalDays, err = optionalInteger(request.URL.Query().Get("survival_days"))
+	if err != nil {
+		return query, errors.New("survival_days must be an integer")
+	}
+	return query, nil
+}
+
+func optionalInteger(value string) (int, error) {
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+	return parsed, nil
+}
+
+func writeInsightResponse(response http.ResponseWriter, value any, err error) {
+	if err != nil {
+		writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSONValue(response, http.StatusOK, value)
+}
 
 const maximumPATLength = 4096
 

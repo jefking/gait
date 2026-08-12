@@ -67,14 +67,17 @@ func TestGitHubClientPaginatesRepositoriesAndUsesBearerToken(t *testing.T) {
 func TestGitHubClientMergesPullRequestsUntilCheckpoint(t *testing.T) {
 	checkpoint := time.Date(2025, time.January, 2, 0, 0, 0, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/repos/org/repo/pulls" {
+		switch request.URL.Path {
+		case "/repos/org/repo/pulls":
+			_ = json.NewEncoder(response).Encode([]map[string]any{
+				{"number": 2, "state": "open", "created_at": "2025-01-03T00:00:00Z", "updated_at": "2025-01-03T00:00:00Z", "user": map[string]any{"login": "new"}},
+				{"number": 1, "state": "closed", "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-02T00:00:00Z", "user": map[string]any{"login": "old"}},
+			})
+		case "/repos/org/repo/pulls/1/reviews", "/repos/org/repo/pulls/2/reviews":
+			_ = json.NewEncoder(response).Encode([]map[string]any{{"id": 10, "state": "APPROVED", "submitted_at": "2025-01-04T00:00:00Z", "user": map[string]any{"login": "reviewer", "type": "User"}}})
+		default:
 			http.NotFound(response, request)
-			return
 		}
-		_ = json.NewEncoder(response).Encode([]map[string]any{
-			{"number": 2, "state": "open", "created_at": "2025-01-03T00:00:00Z", "updated_at": "2025-01-03T00:00:00Z", "user": map[string]any{"login": "new"}},
-			{"number": 1, "state": "closed", "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-02T00:00:00Z", "user": map[string]any{"login": "old"}},
-		})
 	}))
 	defer server.Close()
 	service, err := NewGitHubClient("token", server.URL, server.Client(), RateLimitCallbacks{})
@@ -88,7 +91,7 @@ func TestGitHubClientMergesPullRequestsUntilCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list pull requests: %v", err)
 	}
-	if len(cache.PullRequests) != 2 || cache.PullRequests[0].State != "open" || cache.PullRequests[1].Author.Login != "new" {
+	if cache.Version != 2 || len(cache.PullRequests) != 2 || cache.PullRequests[0].State != "closed" || cache.PullRequests[1].Author.Login != "new" || len(cache.PullRequests[1].Reviews) != 1 {
 		t.Fatalf("unexpected merged pull request cache: %+v", cache.PullRequests)
 	}
 }

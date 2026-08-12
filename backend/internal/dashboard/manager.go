@@ -37,10 +37,11 @@ type Manager struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	mu       sync.RWMutex
-	status   SyncStatus
-	snapshot *Snapshot
-	reports  map[int64]RepositoryReport
+	mu                sync.RWMutex
+	status            SyncStatus
+	snapshot          *Snapshot
+	reports           map[int64]RepositoryReport
+	identityOverrides map[string]IdentityOverride
 
 	eventMu     sync.Mutex
 	subscribers map[chan DashboardEvent]struct{}
@@ -78,6 +79,10 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		return nil, err
 	}
 	reports, warnings := store.LoadReports(snapshot)
+	identityOverrides, identityErr := store.LoadIdentityOverrides()
+	if identityErr != nil {
+		return nil, identityErr
+	}
 	if snapshot != nil {
 		repositories := make([]Repository, 0, len(snapshot.Repositories))
 		repoStates := make(map[int64]string, len(snapshot.Repositories))
@@ -96,16 +101,17 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
-		store:       store,
-		runner:      runner,
-		github:      githubFactory,
-		concurrency: concurrency,
-		ctx:         ctx,
-		cancel:      cancel,
-		status:      SyncStatus{State: SyncIdle, Warnings: warnings},
-		snapshot:    snapshot,
-		reports:     reports,
-		subscribers: make(map[chan DashboardEvent]struct{}),
+		store:             store,
+		runner:            runner,
+		github:            githubFactory,
+		concurrency:       concurrency,
+		ctx:               ctx,
+		cancel:            cancel,
+		status:            SyncStatus{State: SyncIdle, Warnings: warnings},
+		snapshot:          snapshot,
+		reports:           reports,
+		identityOverrides: identityOverrides,
+		subscribers:       make(map[chan DashboardEvent]struct{}),
 	}
 	return manager, nil
 }
@@ -386,6 +392,9 @@ func (manager *Manager) processGitRepository(ctx context.Context, syncID, token 
 				warnings = append(warnings, repository.FullName+": commit report could not be persisted")
 			} else {
 				report.Commits = commits
+				if cacheErr := manager.store.SaveAnalysisCache(repository.ID, commits.Events); cacheErr != nil {
+					warnings = append(warnings, repository.FullName+": enriched analysis cache could not be persisted")
+				}
 			}
 		}
 	}

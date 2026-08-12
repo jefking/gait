@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGitEnvironmentUsesEphemeralHeaderAndDisablesTracing(t *testing.T) {
@@ -92,6 +93,49 @@ func TestRepositoryRunnerAcceptsEmptyRepository(t *testing.T) {
 	}
 	if !runner.emptyRepository(context.Background(), gitBinary, destination) {
 		t.Fatal("expected repository without HEAD to be treated as empty")
+	}
+}
+
+func TestRetainedLinesUsesRepositoryStateAtThirtyDayHorizon(t *testing.T) {
+	gitBinary, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is unavailable")
+	}
+	repository := t.TempDir()
+	runTestGit(t, gitBinary, repository, "init")
+	runTestGit(t, gitBinary, repository, "config", "user.name", "Test User")
+	runTestGit(t, gitBinary, repository, "config", "user.email", "test@example.com")
+	path := filepath.Join(repository, "code.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, gitBinary, repository, "add", "code.txt")
+	runTestGit(t, gitBinary, repository, "commit", "-m", "first")
+	first := strings.TrimSpace(runTestGit(t, gitBinary, repository, "rev-parse", "HEAD"))
+	if err := os.WriteFile(path, []byte("one\nchanged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, gitBinary, repository, "add", "code.txt")
+	runTestGit(t, gitBinary, repository, "commit", "-m", "second")
+	second := strings.TrimSpace(runTestGit(t, gitBinary, repository, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(repository, "other.txt"), []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, gitBinary, repository, "add", "other.txt")
+	runTestGit(t, gitBinary, repository, "commit", "-m", "third")
+	third := strings.TrimSpace(runTestGit(t, gitBinary, repository, "rev-parse", "HEAD"))
+	start := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
+	events := []CommitEvent{
+		{Hash: first, CommittedAt: start, Paths: []string{"code.txt"}, Parents: []string{"parent"}, LinesAdded: 2},
+		{Hash: second, CommittedAt: start.AddDate(0, 0, 15), Paths: []string{"code.txt"}, Parents: []string{first}, LinesAdded: 1},
+		{Hash: third, CommittedAt: start.AddDate(0, 0, 31), Paths: []string{"other.txt"}, Parents: []string{second}, LinesAdded: 1},
+	}
+	NewExecRepositoryRunner().measureRetainedLines(context.Background(), gitBinary, repository, events, 30, 50)
+	if !events[0].RetentionMeasured || events[0].RetainedLines != 1 {
+		t.Fatalf("expected one of two lines retained at day 30: %+v", events[0])
+	}
+	if !events[1].RetentionMeasured || events[1].RetainedLines != 1 {
+		t.Fatalf("an inactive repository should still mature against its stable latest state: %+v", events[1])
 	}
 }
 

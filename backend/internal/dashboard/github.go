@@ -188,11 +188,11 @@ func (client *githubClient) PullRequests(ctx context.Context, repository Reposit
 			return previous, err
 		}
 		for _, item := range response {
-			if !previous.Checkpoint.IsZero() && !item.UpdatedAt.After(previous.Checkpoint) {
+			if previous.Version >= 2 && !previous.Checkpoint.IsZero() && !item.UpdatedAt.After(previous.Checkpoint) {
 				stop = true
 				break
 			}
-			byNumber[item.Number] = PullRequest{
+			pull := PullRequest{
 				Number:    item.Number,
 				State:     item.State,
 				MergedAt:  item.MergedAt,
@@ -206,13 +206,22 @@ func (client *githubClient) PullRequests(ctx context.Context, repository Reposit
 					Type:      item.User.Type,
 				},
 			}
+			if previousPull, exists := byNumber[item.Number]; exists {
+				pull.Reviews = previousPull.Reviews
+			}
+			if reviews, reviewErr := client.pullRequestReviews(ctx, repository, item.Number); reviewErr == nil {
+				pull.Reviews = reviews
+			} else if !IsPullPermissionError(reviewErr) {
+				return previous, reviewErr
+			}
+			byNumber[item.Number] = pull
 		}
 		if len(response) < 100 {
 			break
 		}
 	}
 
-	cache := PullCache{Checkpoint: startedAt, PullRequests: make([]PullRequest, 0, len(byNumber))}
+	cache := PullCache{Version: 2, Checkpoint: startedAt, PullRequests: make([]PullRequest, 0, len(byNumber))}
 	for _, pull := range byNumber {
 		cache.PullRequests = append(cache.PullRequests, pull)
 	}
@@ -220,6 +229,37 @@ func (client *githubClient) PullRequests(ctx context.Context, repository Reposit
 		return cache.PullRequests[left].Number < cache.PullRequests[right].Number
 	})
 	return cache, nil
+}
+
+func (client *githubClient) pullRequestReviews(ctx context.Context, repository Repository, number int64) ([]PullRequestReview, error) {
+	reviews := make([]PullRequestReview, 0)
+	for page := 1; ; page++ {
+		query := url.Values{"per_page": {"100"}, "page": {strconv.Itoa(page)}}
+		var response []struct {
+			ID          int64      `json:"id"`
+			State       string     `json:"state"`
+			SubmittedAt *time.Time `json:"submitted_at"`
+			User        struct {
+				Login     string `json:"login"`
+				AvatarURL string `json:"avatar_url"`
+				Type      string `json:"type"`
+			} `json:"user"`
+		}
+		endpoint := "/repos/" + url.PathEscape(repository.Owner.Login) + "/" + url.PathEscape(repository.Name) + "/pulls/" + strconv.FormatInt(number, 10) + "/reviews"
+		if err := client.get(ctx, endpoint, query, &response); err != nil {
+			return nil, err
+		}
+		for _, item := range response {
+			reviews = append(reviews, PullRequestReview{
+				ID: item.ID, State: item.State, SubmittedAt: item.SubmittedAt,
+				Author: Person{Login: item.User.Login, Name: item.User.Login, AvatarURL: item.User.AvatarURL, Type: item.User.Type},
+			})
+		}
+		if len(response) < 100 {
+			break
+		}
+	}
+	return reviews, nil
 }
 
 func (client *githubClient) get(ctx context.Context, path string, query url.Values, target any) error {

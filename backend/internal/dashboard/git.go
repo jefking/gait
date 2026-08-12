@@ -10,7 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type RepositoryRunner interface {
@@ -89,6 +92,10 @@ func (runner *ExecRepositoryRunner) Sync(ctx context.Context, token string, repo
 }
 
 func (runner *ExecRepositoryRunner) Analyze(ctx context.Context, repositoryPath, outputPath string) (CommitStats, error) {
+	gitBinary := runner.GitBinary
+	if gitBinary == "" {
+		gitBinary = "git"
+	}
 	analyzer := runner.AnalyzerBinary
 	if analyzer == "" {
 		analyzer = "git-changes-by-day"
@@ -96,10 +103,6 @@ func (runner *ExecRepositoryRunner) Analyze(ctx context.Context, repositoryPath,
 	command := exec.CommandContext(ctx, analyzer, "-repo", repositoryPath, "-text-out", outputPath)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		gitBinary := runner.GitBinary
-		if gitBinary == "" {
-			gitBinary = "git"
-		}
 		if !runner.emptyRepository(ctx, gitBinary, repositoryPath) {
 			return CommitStats{}, fmt.Errorf("run git-changes-by-day: %w: %s", err, truncateOutput(output))
 		}
@@ -116,7 +119,161 @@ func (runner *ExecRepositoryRunner) Analyze(ctx context.Context, repositoryPath,
 	if err != nil {
 		return CommitStats{}, fmt.Errorf("validate generated commit report: %w", err)
 	}
+	if err := runner.enrichCommitEvents(ctx, gitBinary, repositoryPath, stats.Events); err != nil {
+		return CommitStats{}, fmt.Errorf("enrich commit events: %w", err)
+	}
 	return stats, nil
+}
+
+func (runner *ExecRepositoryRunner) enrichCommitEvents(ctx context.Context, gitBinary, repositoryPath string, events []CommitEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	byHash := make(map[string]*CommitEvent, len(events))
+	for index := range events {
+		byHash[events[index].Hash] = &events[index]
+	}
+	messageCommand := exec.CommandContext(ctx, gitBinary, "-c", "log.showSignature=false", "log", "--format=%x1e%H%x1f%B%x00")
+	messageCommand.Dir = repositoryPath
+	messageOutput, err := messageCommand.Output()
+	if err != nil {
+		return fmt.Errorf("read commit messages: %w", err)
+	}
+	for _, raw := range strings.Split(string(messageOutput), "\x00") {
+		record := strings.TrimPrefix(strings.TrimSpace(raw), "\x1e")
+		parts := strings.SplitN(record, "\x1f", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if event := byHash[strings.TrimSpace(parts[0])]; event != nil {
+			event.Message = strings.TrimSpace(parts[1])
+		}
+	}
+	pathCommand := exec.CommandContext(ctx, gitBinary, "-c", "log.showSignature=false", "log", "--format=%x1e%H%x1f%P", "--name-only")
+	pathCommand.Dir = repositoryPath
+	pathOutput, err := pathCommand.Output()
+	if err != nil {
+		return fmt.Errorf("read commit paths: %w", err)
+	}
+	for _, raw := range strings.Split(string(pathOutput), "\x1e") {
+		lines := strings.Split(strings.TrimSpace(raw), "\n")
+		if len(lines) == 0 {
+			continue
+		}
+		metadata := strings.SplitN(lines[0], "\x1f", 2)
+		if len(metadata) != 2 {
+			continue
+		}
+		event := byHash[strings.TrimSpace(metadata[0])]
+		if event == nil {
+			continue
+		}
+		event.Parents = strings.Fields(metadata[1])
+		seen := make(map[string]struct{})
+		for _, line := range lines[1:] {
+			path := strings.TrimSpace(line)
+			if path == "" {
+				continue
+			}
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			event.Paths = append(event.Paths, path)
+		}
+	}
+	for index := range events {
+		events[index].Participants = append([]ContributorMetrics{events[index].Author}, commitCoauthors(events[index].Message)...)
+		events[index].ExplicitRevert = isExplicitRevert(events[index].Message)
+	}
+	runner.measureRetainedLines(ctx, gitBinary, repositoryPath, events, 30, 500)
+	return nil
+}
+
+// measureRetainedLines attributes lines in the repository state at the
+// maturity horizon back to the commit that introduced them. The bounded cache
+// keeps first-sync work predictable for very large histories; unmeasured
+// commits remain explicitly unavailable instead of being assigned a proxy.
+func (runner *ExecRepositoryRunner) measureRetainedLines(ctx context.Context, gitBinary, repositoryPath string, events []CommitEvent, survivalDays, maximumBlames int) {
+	ordered := make([]*CommitEvent, 0, len(events))
+	for index := range events {
+		ordered = append(ordered, &events[index])
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].CommittedAt.Before(ordered[j].CommittedAt) })
+	if len(ordered) == 0 {
+		return
+	}
+	asOf := time.Now().UTC()
+	type blameResult struct {
+		counts   map[string]int
+		measured bool
+	}
+	cache := make(map[string]blameResult)
+	queries := 0
+	for _, event := range ordered {
+		if event.LinesAdded <= 0 || len(event.Parents) > 1 || len(event.Paths) == 0 {
+			continue
+		}
+		maturesAt := event.CommittedAt.AddDate(0, 0, survivalDays)
+		if maturesAt.After(asOf) {
+			continue
+		}
+		horizon := ordered[0]
+		for _, candidate := range ordered {
+			if candidate.CommittedAt.After(maturesAt) {
+				break
+			}
+			horizon = candidate
+		}
+		retained, complete := 0, true
+		for _, path := range event.Paths {
+			key := horizon.Hash + "\x00" + path
+			result, exists := cache[key]
+			if !exists {
+				if queries >= maximumBlames {
+					complete = false
+					break
+				}
+				queries++
+				command := exec.CommandContext(ctx, gitBinary, "-c", "blame.showEmail=false", "blame", "--line-porcelain", horizon.Hash, "--", path)
+				command.Dir = repositoryPath
+				output, err := command.Output()
+				result = blameResult{counts: make(map[string]int), measured: err == nil}
+				if err != nil {
+					pathCheck := exec.CommandContext(ctx, gitBinary, "ls-tree", "--name-only", horizon.Hash, "--", path)
+					pathCheck.Dir = repositoryPath
+					pathOutput, pathErr := pathCheck.Output()
+					result.measured = pathErr == nil && strings.TrimSpace(string(pathOutput)) == ""
+				}
+				if err == nil {
+					for _, line := range strings.Split(string(output), "\n") {
+						fields := strings.Fields(line)
+						if len(fields) < 3 {
+							continue
+						}
+						hash := strings.TrimPrefix(fields[0], "^")
+						if len(hash) < 7 {
+							continue
+						}
+						if _, parseErr := strconv.ParseUint(hash[:7], 16, 32); parseErr == nil {
+							result.counts[hash]++
+						}
+					}
+				}
+				cache[key] = result
+			}
+			if !result.measured {
+				complete = false
+				break
+			}
+			retained += result.counts[event.Hash]
+		}
+		if complete {
+			event.RetentionMeasured = true
+			event.RetainedLines = min(retained, event.LinesAdded)
+			event.RetentionDays = survivalDays
+		}
+	}
 }
 
 func (runner *ExecRepositoryRunner) emptyRepository(ctx context.Context, gitBinary, repositoryPath string) bool {
