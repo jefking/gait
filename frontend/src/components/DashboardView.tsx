@@ -6,21 +6,21 @@ import {
   Gauge,
   GitPullRequest,
   LayoutDashboard,
-  Network,
   RefreshCw,
   Settings,
   ShieldCheck,
+  Trophy,
   UsersRound,
   X,
 } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { useState } from 'react'
 import type {
   ActorKind,
+  DeliveryPerformanceMode,
   DeliveryQualityPoint,
   DeliveryRawMetrics,
   DeliveryResponse,
   IdentitySummary,
-  NetworkResponse,
   Snapshot,
   SyncStatus,
 } from '../lib/api'
@@ -29,25 +29,20 @@ import { Avatar } from './Avatar'
 import { DateRangeSlider } from './DateRangeSlider'
 import { IdentityRegistryView } from './IdentityRegistryView'
 import { OwnerSelect } from './OwnerSelect'
-import { TeamNetwork } from './TeamNetwork'
 
 interface DashboardViewProps {
   snapshot: Snapshot
   sync: SyncStatus
   delivery: DeliveryResponse | null
-  network: NetworkResponse | null
   deliveryLoading: boolean
-  networkLoading: boolean
   refreshing: boolean
   identities: IdentitySummary[]
   identitiesLoading: boolean
   ownerId?: number
-  repositoryId?: number
   excludeDead: boolean
   dateFrom?: string
   dateTo?: string
   onOwnerChange: (id?: number) => void
-  onRepositoryChange: (id?: number) => void
   onDateRangeChange: (from: string, to: string) => void
   onIdentityChange: (key: string, update: { kind?: ActorKind; display_name?: string; canonical_key?: string; unmerge?: boolean }) => void
   onRefresh: () => void
@@ -60,31 +55,20 @@ const signedPercent = new Intl.NumberFormat(undefined, { style: 'percent', maxim
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 
 export function DashboardView({
-  snapshot, sync, delivery, network, deliveryLoading, networkLoading, refreshing,
-  identities, identitiesLoading, ownerId, repositoryId, excludeDead, dateFrom, dateTo,
-  onOwnerChange, onRepositoryChange, onDateRangeChange, onIdentityChange, onRefresh, onSettings,
+  snapshot, sync, delivery, deliveryLoading, refreshing,
+  identities, identitiesLoading, ownerId, excludeDead, dateFrom, dateTo,
+  onOwnerChange, onDateRangeChange, onIdentityChange, onRefresh, onSettings,
 }: DashboardViewProps) {
   const [view, setView] = useState<'dashboard' | 'identities'>('dashboard')
-  const [selectedIdentity, setSelectedIdentity] = useState<string>()
-  const classifyIdentity = useCallback((key: string, kind: ActorKind) => onIdentityChange(key, { kind }), [onIdentityChange])
-  const renameIdentity = useCallback((key: string, display_name: string) => onIdentityChange(key, { display_name }), [onIdentityChange])
-  const mergeIdentity = useCallback((key: string, canonical_key: string) => onIdentityChange(key, { canonical_key }), [onIdentityChange])
-  const unmergeIdentity = useCallback((key: string) => onIdentityChange(key, { unmerge: true }), [onIdentityChange])
 
   const organizationOwners = snapshot.owners.filter((owner) => owner.owner.type === 'Organization')
-  const repositories = snapshot.repositories.filter((repository) =>
-    repository.owner.type === 'Organization' &&
-    (!ownerId || repository.owner.id === ownerId) &&
-    (!excludeDead || !repository.liveness?.is_dead),
-  )
   const unknownIdentities = identities.filter((identity) => identity.kind === 'unknown').length
   const meta = delivery?.meta
   const coverage = meta?.coverage
   const period = meta?.from && meta.to ? `${meta.from} → ${meta.to}` : 'Available merged-PR history'
-  const scope = [
-    ownerId ? organizationOwners.find((owner) => owner.owner.id === ownerId)?.owner.login : 'All organizations',
-    repositoryId ? snapshot.repositories.find((repository) => repository.id === repositoryId)?.full_name : 'All repositories',
-  ].filter(Boolean).join(' · ')
+  const scope = ownerId
+    ? organizationOwners.find((owner) => owner.owner.id === ownerId)?.owner.login ?? 'Selected organization'
+    : 'All organizations'
   const cards = [
     {
       label: 'Velocity vs opening pace',
@@ -150,17 +134,13 @@ export function DashboardView({
 
       <GlobalScope
         owners={organizationOwners}
-        repositories={repositories}
         ownerId={ownerId}
-        repositoryId={repositoryId}
         excludeDead={excludeDead}
         meta={meta}
         dateFrom={dateFrom}
         dateTo={dateTo}
         onOwnerChange={onOwnerChange}
-        onRepositoryChange={onRepositoryChange}
         onDateRangeChange={onDateRangeChange}
-        onSettings={onSettings}
       />
 
       {view === 'identities' ? (
@@ -192,8 +172,8 @@ export function DashboardView({
           <FlowHealth delivery={delivery} loading={deliveryLoading} />
         </GraphSection>
 
-        <GraphSection eyebrow="Team evidence" title="Collaboration network" description="Co-authorship, review, and handoff evidence—without ranking contributors or pairs." icon={<Network className="size-4" />} updating={refreshing}>
-          <TeamNetwork network={network} loading={networkLoading} selectedKey={selectedIdentity} onSelect={setSelectedIdentity} onClassify={classifyIdentity} onRename={renameIdentity} onMerge={mergeIdentity} onUnmerge={unmergeIdentity} />
+        <GraphSection eyebrow="Performance" title="Daily and overall leaders" description="Each active day is led by the participant composition with the largest shipped-work index contribution. Overall leadership sums those contributions across the selected period." icon={<Trophy className="size-4" />} updating={refreshing}>
+          <PerformanceLeaders delivery={delivery} loading={deliveryLoading} />
         </GraphSection>
 
         <Methodology delivery={delivery} scope={scope} period={period} />
@@ -203,13 +183,13 @@ export function DashboardView({
   )
 }
 
-function GlobalScope({ owners, repositories, ownerId, repositoryId, excludeDead, meta, dateFrom, dateTo, onOwnerChange, onRepositoryChange, onDateRangeChange, onSettings }: {
-  owners: Snapshot['owners']; repositories: Snapshot['repositories']; ownerId?: number; repositoryId?: number; excludeDead: boolean; meta?: DeliveryResponse['meta']; dateFrom?: string; dateTo?: string;
-  onOwnerChange:(id?:number)=>void; onRepositoryChange:(id?:number)=>void; onDateRangeChange:(from:string,to:string)=>void; onSettings:()=>void
+function GlobalScope({ owners, ownerId, excludeDead, meta, dateFrom, dateTo, onOwnerChange, onDateRangeChange }: {
+  owners: Snapshot['owners']; ownerId?: number; excludeDead: boolean; meta?: DeliveryResponse['meta']; dateFrom?: string; dateTo?: string;
+  onOwnerChange:(id?:number)=>void; onDateRangeChange:(from:string,to:string)=>void
 }) {
   return <section className="no-print mt-6 rounded-3xl border border-white/8 bg-slate-900/55 p-4 sm:p-5" aria-label="Global scope">
-    <div className="mb-3 flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Global scope</p><p className="mt-1 text-xs text-slate-500">Applies to every card, chart, table, network, identity, and export.</p></div><button type="button" onClick={onSettings} className="text-xs text-cyan-300 hover:text-cyan-100">Dead-project settings</button></div>
-    <div className="grid gap-3 md:grid-cols-2"><OwnerSelect owners={owners} value={ownerId} onChange={onOwnerChange} /><label className="block text-xs font-medium text-slate-500">Repository<select value={repositoryId ?? ''} onChange={(event) => onRepositoryChange(event.target.value ? Number(event.target.value) : undefined)} className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-200"><option value="">All repositories</option>{repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.full_name}</option>)}</select></label></div>
+    <div className="mb-3"><p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Global scope</p><p className="mt-1 text-xs text-slate-500">Applies to every card, chart, table, identity, and export.</p></div>
+    <OwnerSelect owners={owners} value={ownerId} onChange={onOwnerChange} />
     <p className="mt-3 text-xs text-slate-500">{excludeDead ? 'Dead repositories are excluded everywhere.' : 'Dead repositories are included everywhere.'}</p>
     {meta?.available_from && meta.available_to && dateFrom && dateTo && <DateRangeSlider availableFrom={meta.available_from} availableTo={meta.available_to} from={dateFrom} to={dateTo} granularity={meta.granularity} onChange={onDateRangeChange} />}
   </section>
@@ -278,12 +258,52 @@ function FlowHealth({ delivery, loading }: { delivery:DeliveryResponse|null;load
   return <div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{metrics.map(([label,value])=><article key={label} className="rounded-2xl border border-white/8 bg-slate-950/45 p-4"><p className="text-xs text-slate-500">{label}</p><p className="mt-2 text-xl font-semibold text-white">{value}</p></article>)}</div><p className="mt-3 text-xs text-slate-500">As of {flow.as_of} · distribution sample n={flow.merged_pull_request_sample}. Additions and deletions per PR remain visible in the accessible flow table.</p><AccessibleFlowTable points={points}/></div>
 }
 
+const performanceModes: Array<{ key: DeliveryPerformanceMode; label: string; color: string }> = [
+  { key: 'human', label: 'Human', color: '#22d3ee' },
+  { key: 'human_human', label: 'Human + Human', color: '#34d399' },
+  { key: 'human_agent', label: 'Human + Agent', color: '#f59e0b' },
+  { key: 'agent', label: 'Agent', color: '#a78bfa' },
+]
+
+function PerformanceLeaders({ delivery, loading }: { delivery: DeliveryResponse | null; loading: boolean }) {
+  if (loading) return <LoadingBlock label="Loading performance leaders" />
+  const daily = delivery?.performance?.daily ?? []
+  const overall = delivery?.performance?.overall
+  if (!overall || !daily.length || overall.total_index <= 0) {
+    return <EmptyBlock>Performance leaders require attributed merged PRs and a non-zero opening baseline.</EmptyBlock>
+  }
+  const width = 980, height = 236, left = 132, right = 24, top = 24, bottom = 40, rowGap = 43
+  const start = Date.parse(`${delivery?.meta.from ?? daily[0].date}T00:00:00Z`)
+  const end = Date.parse(`${delivery?.meta.to ?? daily.at(-1)?.date ?? daily[0].date}T00:00:00Z`)
+  const span = Math.max(86_400_000, end - start)
+  const x = (date: string) => left + ((Date.parse(`${date}T00:00:00Z`) - start) / span) * (width - left - right)
+  const y = (mode: DeliveryPerformanceMode) => top + performanceModes.findIndex((candidate) => candidate.key === mode) * rowGap
+  const maximum = Math.max(...daily.map((point) => point.total_index), 1)
+  const dateLabels = [...new Set([daily[0].date, daily[Math.floor((daily.length - 1) / 2)].date, daily.at(-1)!.date])]
+  const overallMaximum = Math.max(...performanceModes.map(({ key }) => overall[key].index))
+  return <div>
+    <div className="rounded-2xl border border-white/8 bg-slate-950/45 p-4 sm:p-5">
+      <div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-sm font-semibold text-slate-200">Leader per active day</h3><p className="mt-1 text-xs text-slate-500">Dot size reflects that day’s total index contribution. Ties appear in every tied lane.</p></div><p className="text-xs tabular-nums text-slate-500">{integer.format(daily.length)} active {daily.length === 1 ? 'day' : 'days'}</p></div>
+      <div className="mt-4 overflow-x-auto"><svg role="img" aria-labelledby="performance-title performance-desc" viewBox={`0 0 ${width} ${height}`} className="min-w-[46rem] w-full"><title id="performance-title">Daily performance leader by participant composition</title><desc id="performance-desc">Four lanes show which participant composition contributed the most baseline-relative shipped performance on each active day.</desc>{performanceModes.map(({ key, label, color })=><g key={key}><text x={left-12} y={y(key)+4} textAnchor="end" fill="#94a3b8" fontSize="12">{label}</text><line x1={left} x2={width-right} y1={y(key)} y2={y(key)} stroke="#334155" strokeDasharray="2 7" opacity=".65"/><circle cx={left-3} cy={y(key)} r="3" fill={color}/></g>)}{daily.flatMap((point)=>{const dayMaximum=Math.max(...performanceModes.map(({key})=>point[key].index));if(dayMaximum<=0)return[];const tied=performanceModes.filter(({key})=>Math.abs(point[key].index-dayMaximum)<1e-9);return tied.map(({key,label,color})=><circle key={`${point.date}-${key}`} cx={x(point.date)} cy={y(key)} r={3+Math.min(5,Math.sqrt(point.total_index/maximum)*5)} fill={color} fillOpacity={tied.length>1?.28:.82} stroke={color} strokeWidth={tied.length>1?2:1}><title>{point.date}: {tied.length>1?'tie including ':''}{label} · {point[key].index.toFixed(1)} index points · {point[key].merged_pull_requests} merged PRs</title></circle>)})}{dateLabels.map((date)=><g key={date}><line x1={x(date)} x2={x(date)} y1={height-bottom} y2={height-bottom+5} stroke="#64748b"/><text x={x(date)} y={height-16} fill="#64748b" fontSize="10" textAnchor={date===dateLabels[0]?'start':date===dateLabels.at(-1)?'end':'middle'}>{date}</text></g>)}</svg></div>
+    </div>
+    <div className="mt-5"><div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-sm font-semibold text-slate-200">Overall leaders</h3><p className="mt-1 text-xs text-slate-500">Cumulative contribution within the selected period.</p></div><span className="rounded-full border border-amber-300/20 bg-amber-300/[0.07] px-3 py-1 text-xs font-medium text-amber-100">{overall.leader === 'tie' ? 'Overall tie' : `${performanceModeLabel(overall.leader)} leads`}</span></div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{performanceModes.map(({key,label,color})=>{const metric=overall[key];const leads=metric.index===overallMaximum;return <article key={key} className={`rounded-2xl border p-4 ${leads?'border-amber-300/30 bg-amber-300/[0.07]':'border-white/8 bg-slate-950/45'}`}><div className="flex items-center justify-between gap-2"><p className="text-sm font-semibold text-slate-200">{label}</p><span className="size-2.5 rounded-full" style={{background:color}}/>{leads&&<span className="sr-only">Overall leader</span>}</div><p className="mt-4 text-2xl font-semibold tabular-nums text-white">{metric.index.toFixed(1)}</p><p className="mt-1 text-xs text-slate-500">index points · {integer.format(metric.merged_pull_requests)} merged {metric.merged_pull_requests===1?'PR':'PRs'}</p></article>})}</div>
+    </div>
+    <AccessiblePerformanceTable delivery={delivery!}/>
+  </div>
+}
+
+function performanceModeLabel(mode: DeliveryPerformanceMode | 'tie' | 'none') {
+  return performanceModes.find((candidate) => candidate.key === mode)?.label ?? (mode === 'tie' ? 'Tie' : 'No mode')
+}
+
 function Methodology({ delivery, scope, period }: { delivery:DeliveryResponse|null;scope:string;period:string }) {
   const coverage=delivery?.meta.coverage
-  return <section className="report-methodology mt-7 rounded-3xl border border-white/8 bg-slate-900/55 p-5 sm:p-6"><details><summary className="cursor-pointer text-sm font-semibold text-white">Methodology, coverage, and limitations</summary><div className="mt-5 grid gap-5 text-sm leading-6 text-slate-400 lg:grid-cols-2"><div><h3 className="font-medium text-slate-200">Velocity contract</h3><p className="mt-2">A shipped unit is a merged PR on its merge date. Per repository and mode: 100 × [0.5 × merged PRs ÷ baseline mean total PRs + 0.5 × changed lines ÷ baseline mean total changed lines]. An available dimension receives full weight when the other baseline is zero. Portfolio views equal-weight eligible repository indices.</p><p className="mt-2">Changed lines = additions + deletions. Commit count is batch context, never a positive velocity input. Human, agent, and collaborative contributions add exactly to total.</p></div><div><h3 className="font-medium text-slate-200">Attribution + evidence</h3><p className="mt-2">Known PR authors, pre-merge reviewers, commit authors, and recognized co-authors determine work mode. Gait never infers agent use from prose or coding style. Unknown participants do not override known evidence; fully unknown PRs are excluded.</p><p className="mt-2">Impact estimates use eight-week windows excluding adoption week. Repository telemetry supports controlled comparisons or observed associations, not unconditional causal claims.</p></div><div><h3 className="font-medium text-slate-200">Coverage</h3><p className="mt-2">{coverage?.detailed_pull_requests??0} enriched PRs; {coverage?.complete_commit_evidence_pull_requests??0} complete commit lists; {coverage?.truncated_commit_evidence_pull_requests??0} truncated; {coverage?.actions_covered_pull_requests??0} PRs with conclusive GitHub Actions evidence.{coverage?.actions_permission_denied?' Actions permission is missing.':''}</p></div><div><h3 className="font-medium text-slate-200">Research basis</h3><ul className="mt-2 list-disc pl-5"><li><a className="text-cyan-300" href="https://www.microsoft.com/en-us/research/publication/the-space-of-developer-productivity-theres-more-to-it-than-you-think/">SPACE framework</a></li><li><a className="text-cyan-300" href="https://dora.dev/guides/dora-metrics/">DORA delivery metrics</a> and <a className="text-cyan-300" href="https://cloud.google.com/blog/products/ai-machine-learning/announcing-the-2025-dora-report">2025 AI findings</a></li><li><a className="text-cyan-300" href="https://www.microsoft.com/en-us/research/publication/the-effects-of-generative-ai-on-high-skilled-work-evidence-from-three-field-experiments-with-software-developers/">Microsoft field experiments</a></li><li><a className="text-cyan-300" href="https://metr.org/blog/2026-02-24-uplift-update/">METR uplift update</a></li><li><a className="text-cyan-300" href="https://research.google/pubs/software-development-is-a-team-sport/">Software development is a team sport</a> and <a className="text-cyan-300" href="https://research.google/pubs/what-improves-developer-productivity-at-google-code-quality/">code-quality research</a></li></ul></div></div></details><div className="print-only mt-5"><h2>Methodology appendix</h2><p>Scope: {scope}. Period: {period}.</p><p>Exclusions and coverage: {delivery?.meta.unavailable?.join(', ')||'none reported'}.</p></div></section>
+  return <section className="report-methodology mt-7 rounded-3xl border border-white/8 bg-slate-900/55 p-5 sm:p-6"><details><summary className="cursor-pointer text-sm font-semibold text-white">Methodology, coverage, and limitations</summary><div className="mt-5 grid gap-5 text-sm leading-6 text-slate-400 lg:grid-cols-2"><div><h3 className="font-medium text-slate-200">Velocity contract</h3><p className="mt-2">A shipped unit is a merged PR on its merge date. Per repository and mode: 100 × [0.5 × merged PRs ÷ baseline mean total PRs + 0.5 × changed lines ÷ baseline mean total changed lines]. An available dimension receives full weight when the other baseline is zero. Portfolio views equal-weight eligible repository indices.</p><p className="mt-2">Changed lines = additions + deletions. Commit count is batch context, never a positive velocity input. Human, agent, and collaborative contributions add exactly to total.</p></div><div><h3 className="font-medium text-slate-200">Attribution + performance</h3><p className="mt-2">Known PR authors, pre-merge reviewers, commit authors, and recognized co-authors determine work mode. Performance splits attributed PRs into one human, multiple humans, mixed human–agent, or agent-only participation. Daily leadership uses the largest index contribution; overall leadership sums daily contributions in the selected period.</p><p className="mt-2">Gait never infers agent use from prose or coding style. Unknown participants do not override known evidence; fully unknown PRs are excluded. Impact estimates use eight-week windows excluding adoption week. Repository telemetry supports controlled comparisons or observed associations, not unconditional causal claims.</p></div><div><h3 className="font-medium text-slate-200">Coverage</h3><p className="mt-2">{coverage?.detailed_pull_requests??0} enriched PRs; {coverage?.complete_commit_evidence_pull_requests??0} complete commit lists; {coverage?.truncated_commit_evidence_pull_requests??0} truncated; {coverage?.actions_covered_pull_requests??0} PRs with conclusive GitHub Actions evidence.{coverage?.actions_permission_denied?' Actions permission is missing.':''}</p></div><div><h3 className="font-medium text-slate-200">Research basis</h3><ul className="mt-2 list-disc pl-5"><li><a className="text-cyan-300" href="https://www.microsoft.com/en-us/research/publication/the-space-of-developer-productivity-theres-more-to-it-than-you-think/">SPACE framework</a></li><li><a className="text-cyan-300" href="https://dora.dev/guides/dora-metrics/">DORA delivery metrics</a> and <a className="text-cyan-300" href="https://cloud.google.com/blog/products/ai-machine-learning/announcing-the-2025-dora-report">2025 AI findings</a></li><li><a className="text-cyan-300" href="https://www.microsoft.com/en-us/research/publication/the-effects-of-generative-ai-on-high-skilled-work-evidence-from-three-field-experiments-with-software-developers/">Microsoft field experiments</a></li><li><a className="text-cyan-300" href="https://metr.org/blog/2026-02-24-uplift-update/">METR uplift update</a></li><li><a className="text-cyan-300" href="https://research.google/pubs/software-development-is-a-team-sport/">Software development is a team sport</a> and <a className="text-cyan-300" href="https://research.google/pubs/what-improves-developer-productivity-at-google-code-quality/">code-quality research</a></li></ul></div></div></details><div className="print-only mt-5"><h2>Methodology appendix</h2><p>Scope: {scope}. Period: {period}.</p><p>Exclusions and coverage: {delivery?.meta.unavailable?.join(', ')||'none reported'}.</p></div></section>
 }
 
 function AccessibleVelocityTable({delivery}:{delivery:DeliveryResponse}){return <table className="sr-only"><caption>Velocity index contributions over time</caption><thead><tr><th>Period</th><th>Human</th><th>Agent</th><th>Collaborative</th><th>Total</th><th>Complete</th></tr></thead><tbody>{delivery.velocity.map((point)=><tr key={point.date}><td>{point.date}</td><td>{point.human.index}</td><td>{point.agent.index}</td><td>{point.collaborative.index}</td><td>{point.total_index}</td><td>{point.complete?'yes':'no'}</td></tr>)}</tbody></table>}
+function AccessiblePerformanceTable({delivery}:{delivery:DeliveryResponse}){return <table className="sr-only"><caption>Daily performance leaders by participant composition</caption><thead><tr><th>Date</th><th>Leader</th><th>Human</th><th>Human plus human</th><th>Human plus agent</th><th>Agent</th><th>Total</th></tr></thead><tbody>{(delivery.performance?.daily??[]).map((point)=><tr key={point.date}><td>{point.date}</td><td>{performanceModeLabel(point.leader)}</td><td>{point.human.index}</td><td>{point.human_human.index}</td><td>{point.human_agent.index}</td><td>{point.agent.index}</td><td>{point.total_index}</td></tr>)}</tbody></table>}
 function AccessibleQualityTable({points}:{points:DeliveryQualityPoint[]}){return <table className="sr-only"><caption>Quality signals and samples by period</caption><thead><tr><th>Period</th><th>Actions failure incidence</th><th>Actions PR sample</th><th>Failed attempts</th><th>Total attempts</th><th>Revert rate</th><th>Commit sample</th><th>Review coverage</th><th>Review sample</th><th>Retained-line rate</th><th>Retention sample</th><th>Median merge hours</th><th>p90 merge hours</th><th>Merge sample</th></tr></thead><tbody>{points.map((point)=><tr key={point.date}><td>{point.date}</td><td>{point.actions_failure_incidence}</td><td>{point.actions_pull_sample}</td><td>{point.failed_actions_attempts}</td><td>{point.total_actions_attempts}</td><td>{point.revert_rate}</td><td>{point.commit_sample}</td><td>{point.review_coverage}</td><td>{point.review_sample}</td><td>{point.retained_line_rate}</td><td>{point.retention_sample}</td><td>{point.median_merge_hours}</td><td>{point.p90_merge_hours}</td><td>{point.merge_time_sample}</td></tr>)}</tbody></table>}
 function AccessibleFlowTable({points}:{points:DeliveryResponse['flow']['points']}){return <table className="sr-only"><caption>PR flow and batch health by period</caption><thead><tr><th>Period</th><th>Merged PRs</th><th>Median changed lines</th><th>p90 changed lines</th><th>Median commits</th><th>p90 commits</th><th>Median additions</th><th>p90 additions</th><th>Median deletions</th><th>p90 deletions</th></tr></thead><tbody>{points.map((point)=><tr key={point.date}><td>{point.date}</td><td>{point.merged_pull_requests}</td><td>{point.median_changed_lines}</td><td>{point.p90_changed_lines}</td><td>{point.median_commits}</td><td>{point.p90_commits}</td><td>{point.median_additions}</td><td>{point.p90_additions}</td><td>{point.median_deletions}</td><td>{point.p90_deletions}</td></tr>)}</tbody></table>}
 function Metric({label,value}:{label:string;value:string|number}){return <div><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 font-medium text-slate-200">{value}</dd></div>}

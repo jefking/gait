@@ -120,14 +120,14 @@ func TestStartSyncAPIRejectsConcurrentJob(t *testing.T) {
 
 func TestDeliveryAPIParsesGlobalScope(t *testing.T) {
 	service := &fakeDashboardService{}
-	request := httptest.NewRequest(http.MethodGet, "/api/insights/delivery?organization_id=7&repository_id=9&exclude_dead=true&from=2025-01-01&to=2025-02-01", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/insights/delivery?organization_id=7&exclude_dead=true&from=2025-01-01&to=2025-02-01", nil)
 	response := httptest.NewRecorder()
 	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected OK, got %d: %s", response.Code, response.Body.String())
 	}
 	query := service.insightQuery
-	if query.OwnerID != 7 || query.RepositoryID != 9 || !query.ExcludeDead || query.From == nil || query.To == nil {
+	if query.OwnerID != 7 || !query.ExcludeDead || query.From == nil || query.To == nil {
 		t.Fatalf("unexpected query: %+v", query)
 	}
 }

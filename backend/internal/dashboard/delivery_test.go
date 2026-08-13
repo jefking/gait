@@ -74,14 +74,14 @@ func TestDeliveryEmptyScopeSerializesCollectionsAsArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Velocity == nil || response.Quality.Points == nil || response.Quality.Signals == nil || response.Flow.Points == nil || response.Impact.QualityDeltas == nil {
+	if response.Velocity == nil || response.Performance.Daily == nil || response.Quality.Points == nil || response.Quality.Signals == nil || response.Flow.Points == nil || response.Impact.QualityDeltas == nil {
 		t.Fatalf("empty delivery collections must be non-nil: %+v", response)
 	}
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"velocity":[]`, `"signals":[]`, `"points":[]`, `"quality_deltas":[]`} {
+	for _, field := range []string{`"velocity":[]`, `"daily":[]`, `"signals":[]`, `"points":[]`, `"quality_deltas":[]`} {
 		if !strings.Contains(string(encoded), field) {
 			t.Errorf("delivery JSON does not contain %s: %s", field, encoded)
 		}
@@ -108,6 +108,49 @@ func TestDeliveryAttributionPrefersStructuredCommitParticipants(t *testing.T) {
 	}
 	if response.Raw.Collaborative.MergedPullRequests != 1 || response.Raw.Human.MergedPullRequests != 0 {
 		t.Fatalf("structured commit participants did not drive PR attribution: %+v", response.Raw)
+	}
+}
+
+func TestDeliveryPerformanceSeparatesDailyParticipantCompositions(t *testing.T) {
+	from := mustDeliveryDate("2025-01-06")
+	to := mustDeliveryDate("2025-01-10")
+	people := []struct {
+		date   time.Time
+		author Person
+		review *Person
+	}{
+		{from, Person{Login: "alice", Type: "User"}, nil},
+		{from.AddDate(0, 0, 1), Person{Login: "alice", Type: "User"}, &Person{Login: "bob", Type: "User"}},
+		{from.AddDate(0, 0, 2), Person{Login: "alice", Type: "User"}, &Person{Login: "agent[bot]", Type: "Bot"}},
+		{from.AddDate(0, 0, 3), Person{Login: "agent[bot]", Type: "Bot"}, nil},
+		{from.AddDate(0, 0, 4), Person{Login: "agent[bot]", Type: "Bot"}, nil},
+	}
+	pulls := make([]PullRequest, 0, len(people))
+	for index, participant := range people {
+		pull := deliveryTestPull(int64(index+1), participant.date, participant.author, 8, 2, 1)
+		if participant.review != nil {
+			submitted := participant.date.Add(-time.Hour)
+			pull.Reviews = []PullRequestReview{{ID: int64(index + 1), State: "APPROVED", SubmittedAt: &submitted, Author: *participant.review}}
+		}
+		pulls = append(pulls, pull)
+	}
+	manager := &Manager{reports: map[int64]RepositoryReport{1: deliveryTestReport(1, 10, "Organization", pulls)}, identityOverrides: map[string]IdentityOverride{}}
+	response, err := manager.InsightDelivery(InsightQuery{From: &from, To: &to})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Performance.Daily) != 5 {
+		t.Fatalf("daily performance points = %d, want 5", len(response.Performance.Daily))
+	}
+	wantLeaders := []string{"human", "human_human", "human_agent", "agent", "agent"}
+	for index, point := range response.Performance.Daily {
+		if point.Leader != wantLeaders[index] || math.Abs(point.TotalIndex-100) > 1e-9 {
+			t.Fatalf("daily point %d = %+v, want leader %q at index 100", index, point, wantLeaders[index])
+		}
+	}
+	overall := response.Performance.Overall
+	if overall.Leader != "agent" || overall.Agent.MergedPullRequests != 2 || overall.Human.MergedPullRequests != 1 || overall.HumanHuman.MergedPullRequests != 1 || overall.HumanAgent.MergedPullRequests != 1 {
+		t.Fatalf("unexpected overall performance: %+v", overall)
 	}
 }
 

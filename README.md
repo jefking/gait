@@ -9,9 +9,10 @@ combines the result with enriched GitHub pull request and GitHub Actions history
 
 The dashboard reports merged-PR velocity for human, agent, and collaborative work,
 keeps raw shipped-work measures auditable, and evaluates throughput beside build,
-review, revert, retention, merge-time, and PR-flow guardrails. It has one leading
-work mode, never an individual leaderboard. Attribution uses exact participant
-evidence; unknown work remains visible as coverage but is excluded from mode indices.
+review, revert, retention, merge-time, and PR-flow guardrails. Daily and overall
+performance leaders compare solo-human, multi-human, human–agent, and agent-only
+participation—never individuals. Attribution uses exact participant evidence;
+unknown work remains visible as coverage but is excluded from mode indices.
 Repository telemetry is presented as observed association rather than causal proof.
 
 ## Stack
@@ -147,7 +148,7 @@ with access to the Docker daemon can inspect container environment variables.
 | --- | --- | --- |
 | `GET` | `/api/health` | Liveness check |
 | `GET` | `/api/dashboard` | Latest snapshot and current sync status |
-| `GET` | `/api/insights/delivery` | Scoped velocity, raw measures, quality, flow, impact uncertainty, and coverage |
+| `GET` | `/api/insights/delivery` | Scoped velocity, daily/overall performance, raw measures, quality, flow, impact uncertainty, and coverage |
 | `GET` | `/api/insights/network` | Evidence-separated collaboration identities and edges |
 | `GET` | `/api/identities` | Scoped identity classifications and evidence |
 | `PATCH` | `/api/identities/{key}` | Persist a classification, display, or alias override |
@@ -155,9 +156,9 @@ with access to the Docker daemon can inspect container environment variables.
 | `POST` | `/api/sync` | Start a background sync; `{ "pat": "…" }` replaces the in-memory token, while `{}` reuses it |
 
 Delivery, network, and identity reads share exactly the same optional
-`organization_id`, `repository_id`, `from`, `to`, and
-`exclude_dead=true|false` query. Dates use UTC `YYYY-MM-DD`. A repository always
-implies its organization, and repository selectors are limited to that organization.
+`organization_id`, `from`, `to`, and `exclude_dead=true|false` query. Omitting
+`organization_id` selects all organizations.
+Dates use UTC `YYYY-MM-DD`.
 Responses automatically use daily buckets for ranges up to 62 days, weekly buckets
 up to two years, and monthly buckets for longer histories. Personal repositories are
 not synced or returned; existing personal-repository cache files are left untouched.
@@ -167,6 +168,10 @@ not synced or returned; existing personal-repository cache files are left untouc
 The shipped unit is a merged PR, assigned to its merge date. Known PR authors,
 reviews submitted before merge, commit authors, recognized co-authors, and
 user-maintained overrides determine `human`, `agent`, or `collaborative` mode.
+The performance breakdown further separates one human, multiple humans, mixed
+human–agent participation, and agent-only participation. Each active day's leader
+has the largest delivery-index contribution; the overall leader sums those daily
+contributions inside the selected range.
 Structured co-author fields from `git-changes-by-day` are authoritative for refreshed
 commit reports; full-message trailer parsing remains only for older reports. Agent
 attribution uses exact GitHub Bot/App or known-signature evidence and never

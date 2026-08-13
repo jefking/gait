@@ -19,20 +19,40 @@ const owners: OwnerSummary[] = [
     lines_deleted: 5,
     pull_requests_opened: 2,
   },
+  {
+    owner: {
+      id: 8,
+      login: 'second-org',
+      type: 'Organization',
+      avatar_url: 'https://avatars.example.test/second-org.png',
+      html_url: 'https://github.com/second-org',
+    },
+    repositories: 2,
+    contributors: 3,
+    commits: 8,
+    lines_added: 12,
+    lines_deleted: 3,
+    pull_requests_opened: 1,
+  },
 ]
 
 describe('OwnerSelect', () => {
-  it('shows GitHub avatars in the list and selected control', () => {
+  it('shows every organization and selects all or exactly one', () => {
     const change = vi.fn()
     const { rerender } = render(<OwnerSelect owners={owners} onChange={change} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Organization All organizations' }))
-    const option = screen.getByRole('option', { name: 'example-org' })
-    expect(option.querySelector('img')).toHaveAttribute('src', owners[0].owner.avatar_url)
-    fireEvent.click(option)
-    expect(change).toHaveBeenCalledWith(7)
+    expect(screen.getByRole('radio', { name: 'All organizations' })).toHaveAttribute('aria-checked', 'true')
+    const example = screen.getByRole('radio', { name: 'example-org' })
+    const second = screen.getByRole('radio', { name: 'second-org' })
+    expect(example.querySelector('img')).toHaveAttribute('src', owners[0].owner.avatar_url)
+    expect(second).toBeVisible()
+    fireEvent.click(example)
+    expect(change).toHaveBeenLastCalledWith(7)
 
     rerender(<OwnerSelect owners={owners} value={7} onChange={change} />)
-    const selected = screen.getByRole('button', { name: 'Organization example-org' })
-    expect(selected.querySelector('img')).toHaveAttribute('src', owners[0].owner.avatar_url)
+    expect(screen.getByRole('radio', { name: 'example-org' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getByRole('radio', { name: 'second-org' }))
+    expect(change).toHaveBeenLastCalledWith(8)
+    fireEvent.click(screen.getByRole('radio', { name: 'All organizations' }))
+    expect(change).toHaveBeenLastCalledWith()
   })
 })

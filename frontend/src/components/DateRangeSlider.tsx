@@ -1,6 +1,5 @@
-import { brushX, scaleUtc, select, type D3BrushEvent } from 'd3'
 import { CalendarRange } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { ActivityGranularity } from '../lib/api'
 import { addUTCMonths } from '../lib/dates'
 
@@ -16,12 +15,15 @@ interface DateRangeSliderProps {
 interface DraftRange {
   scope: string
   start: number
-  end: number
+}
+
+interface SnapPoint {
+  start: number
+  labels: string[]
 }
 
 const dayMilliseconds = 24 * 60 * 60 * 1000
 const rangePresets = [
-  { id: 'week', label: '7 days', start: (maximum: Date) => addDays(maximum, -6) },
   { id: 'month', label: '31 days', start: (maximum: Date) => addDays(maximum, -30) },
   { id: 'six-months', label: '6 months', start: (maximum: Date) => addUTCMonths(maximum, -6) },
   { id: 'year', label: '1 year', start: (maximum: Date) => addYears(maximum, -1) },
@@ -31,7 +33,6 @@ export function DateRangeSlider({
   availableFrom,
   availableTo,
   from,
-  to,
   granularity,
   onChange,
 }: DateRangeSliderProps) {
@@ -40,50 +41,21 @@ export function DateRangeSlider({
   const totalDays = Math.max(0, Math.round((maximum.getTime() - minimum.getTime()) / dayMilliseconds))
   const rangeMaximum = Math.max(1, totalDays)
   const externalStart = clamp(dayOffset(minimum, parseUTCDate(from)), 0, totalDays)
-  const externalEnd = clamp(dayOffset(minimum, parseUTCDate(to)), externalStart, totalDays)
-  const scope = `${availableFrom}:${availableTo}:${from}:${to}`
-  const [draft, setDraft] = useState<DraftRange>({ scope, start: externalStart, end: externalEnd })
-  const selected = draft.scope === scope ? draft : { scope, start: externalStart, end: externalEnd }
+  const scope = `${availableFrom}:${availableTo}:${from}`
+  const [draft, setDraft] = useState<DraftRange>({ scope, start: externalStart })
+  const selected = draft.scope === scope ? draft : { scope, start: externalStart }
   const selectedFrom = addDays(minimum, selected.start)
-  const selectedTo = addDays(minimum, selected.end)
+  const snapPoints = buildSnapPoints(minimum, maximum)
   const updateStart = (value: number) => {
-    setDraft({ scope, start: Math.min(value, selected.end), end: selected.end })
-  }
-  const updateEnd = (value: number) => {
-    setDraft({ scope, start: selected.start, end: Math.max(value, selected.start) })
+    setDraft({ scope, start: clamp(value, 0, totalDays) })
   }
   const commit = () => {
-    onChange(formatISODate(selectedFrom), formatISODate(selectedTo))
+    const snappedStart = closestSnapPoint(selected.start, snapPoints)
+    setDraft({ scope, start: snappedStart })
+    onChange(formatISODate(addDays(minimum, snappedStart)), availableTo)
   }
-  const chooseRange = (candidate: Date) => {
-    const nextFrom = candidate < minimum ? minimum : candidate
-    onChange(formatISODate(nextFrom), availableTo)
-  }
-  const allTimeSelected = formatISODate(selectedFrom) === availableFrom
-    && formatISODate(selectedTo) === availableTo
-  const brushRef = useRef<SVGGElement>(null)
-
-  useEffect(() => {
-    if (!brushRef.current || totalDays === 0) return
-    const x = scaleUtc().domain([minimum, maximum]).range([9, 991])
-    const behavior = brushX<unknown>()
-      .extent([[9, 2], [991, 30]])
-      .on('end', (event: D3BrushEvent<unknown>) => {
-        if (!event.sourceEvent || !event.selection) return
-        const [left, right] = event.selection as [number, number]
-        const nextStart = clamp(dayOffset(minimum, x.invert(left)), 0, totalDays)
-        const nextEnd = clamp(dayOffset(minimum, x.invert(right)), nextStart, totalDays)
-        setDraft({ scope, start: nextStart, end: nextEnd })
-        onChange(formatISODate(addDays(minimum, nextStart)), formatISODate(addDays(minimum, nextEnd)))
-      })
-    const group = select(brushRef.current)
-    group.call(behavior)
-    group.call(behavior.move, [x(selectedFrom), x(selectedTo)])
-    group.selectAll('.overlay').attr('fill', 'transparent')
-    group.selectAll('.selection').attr('fill', '#22d3ee').attr('fill-opacity', .28).attr('stroke', '#67e8f9').attr('rx', 7)
-    group.selectAll('.handle').attr('fill', '#67e8f9').attr('stroke', '#0f172a').attr('stroke-width', 3).attr('rx', 5)
-    return () => { group.on('.brush', null) }
-  }, [maximum, minimum, onChange, scope, selected.end, selected.start, selectedFrom, selectedTo, totalDays])
+  const selectedSnap = closestSnapPoint(selected.start, snapPoints)
+  const timelineStart = timelineX(selected.start, totalDays)
 
   return (
     <section className="mt-6 rounded-2xl border border-white/8 bg-slate-950/45 px-4 py-4 sm:px-5">
@@ -100,46 +72,36 @@ export function DateRangeSlider({
         <p className="text-xs tabular-nums text-slate-400">
           <time dateTime={formatISODate(selectedFrom)}>{formatDisplayDate(selectedFrom)}</time>
           <span className="px-2 text-slate-600">→</span>
-          <time dateTime={formatISODate(selectedTo)}>{formatDisplayDate(selectedTo)}</time>
+          <time dateTime={availableTo}>{formatDisplayDate(maximum)}</time>
         </p>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Quick history ranges">
-        {rangePresets.map((preset) => {
-          const presetFrom = preset.start(maximum) < minimum ? minimum : preset.start(maximum)
-          const selectedPreset = !allTimeSelected
-            && formatISODate(selectedFrom) === formatISODate(presetFrom)
-            && formatISODate(selectedTo) === availableTo
-          return (
-            <button
-              key={preset.id}
-              type="button"
-              aria-pressed={selectedPreset}
-              onClick={() => chooseRange(presetFrom)}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${selectedPreset ? 'border-cyan-300/35 bg-cyan-300/10 text-cyan-100' : 'border-white/8 bg-white/[0.025] text-slate-400 hover:border-cyan-300/20 hover:text-slate-200'}`}
-            >
-              {preset.label}
-            </button>
-          )
-        })}
-        <button
-          type="button"
-          aria-pressed={allTimeSelected}
-          onClick={() => chooseRange(minimum)}
-          className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${allTimeSelected ? 'border-cyan-300/35 bg-cyan-300/10 text-cyan-100' : 'border-white/8 bg-white/[0.025] text-slate-400 hover:border-cyan-300/20 hover:text-slate-200'}`}
-        >
-          All time
-        </button>
-      </div>
-
-      <div className="relative mt-4 h-8" data-testid="date-range-slider">
+      <div className="relative mt-5 h-8" data-testid="date-range-slider">
         <svg viewBox="0 0 1000 32" preserveAspectRatio="none" className="absolute inset-0 h-8 w-full" aria-hidden="true">
           <line x1="9" x2="991" y1="16" y2="16" stroke="rgba(255,255,255,.1)" strokeWidth="6" strokeLinecap="round" />
-          <g ref={brushRef} />
+          <line x1={timelineStart} x2="991" y1="16" y2="16" stroke="#22d3ee" strokeOpacity=".28" strokeWidth="12" strokeLinecap="round" />
+          {snapPoints.map((point) => (
+            <circle
+              key={point.start}
+              cx={timelineX(point.start, totalDays)}
+              cy="16"
+              r={point.start === selectedSnap ? 5 : 3.5}
+              fill={point.start === selectedSnap ? '#67e8f9' : '#64748b'}
+              stroke="#0f172a"
+              strokeWidth="2"
+              data-snap-label={point.labels.join(', ')}
+            >
+              <title>{point.labels.join(' · ')}</title>
+            </circle>
+          ))}
+          <circle cx="991" cy="16" r="5" fill="#67e8f9" stroke="#0f172a" strokeWidth="2">
+            <title>Latest date</title>
+          </circle>
         </svg>
         <input
           type="range"
           aria-label="Oldest activity date"
+          aria-valuetext={formatDisplayDate(selectedFrom)}
           min={0}
           max={rangeMaximum}
           value={selected.start}
@@ -149,23 +111,12 @@ export function DateRangeSlider({
           onKeyUp={commit}
           onBlur={commit}
           className="date-range-input"
-          style={{ zIndex: selected.start >= selected.end - 1 ? 3 : 2 }}
-        />
-        <input
-          type="range"
-          aria-label="Latest activity date"
-          min={0}
-          max={rangeMaximum}
-          value={selected.end}
-          disabled={totalDays === 0}
-          onChange={(event) => updateEnd(Number(event.target.value))}
-          onPointerUp={commit}
-          onKeyUp={commit}
-          onBlur={commit}
-          className="date-range-input"
-          style={{ zIndex: 2 }}
         />
       </div>
+
+      <p className="sr-only" aria-live="polite">
+        The end date is fixed at {formatDisplayDate(maximum)}. The start date snaps to {snapPoints.map((point) => point.labels.join(' or ')).join(', ')}.
+      </p>
 
       <div className="flex justify-between text-[10px] tabular-nums text-slate-600">
         <time dateTime={availableFrom}>{formatDisplayDate(minimum)}</time>
@@ -173,6 +124,32 @@ export function DateRangeSlider({
       </div>
     </section>
   )
+}
+
+function buildSnapPoints(minimum: Date, maximum: Date) {
+  const points = new Map<number, SnapPoint>()
+  const candidates = [
+    ...rangePresets.map((preset) => ({ label: preset.label, date: preset.start(maximum) })),
+    { label: 'All time', date: minimum },
+  ]
+  for (const candidate of candidates) {
+    const date = candidate.date < minimum ? minimum : candidate.date
+    const start = dayOffset(minimum, date)
+    const point = points.get(start)
+    if (point) point.labels.push(candidate.label)
+    else points.set(start, { start, labels: [candidate.label] })
+  }
+  return [...points.values()].sort((left, right) => left.start - right.start)
+}
+
+function closestSnapPoint(value: number, points: SnapPoint[]) {
+  return points.reduce((closest, point) =>
+    Math.abs(point.start - value) < Math.abs(closest - value) ? point.start : closest,
+  points[0]?.start ?? 0)
+}
+
+function timelineX(value: number, totalDays: number) {
+  return 9 + (value / Math.max(1, totalDays)) * 982
 }
 
 function parseUTCDate(value: string) {

@@ -84,7 +84,8 @@ select {
   height: 2rem;
   margin: 0;
   appearance: none;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   background: transparent;
   outline: none;
 }

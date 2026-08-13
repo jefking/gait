@@ -286,6 +286,21 @@ export interface DeliveryVelocityPoint {
   complete: boolean
 }
 
+export type DeliveryPerformanceMode = 'human' | 'human_human' | 'human_agent' | 'agent'
+
+export interface DeliveryPerformanceBreakdown {
+  human: DeliveryModeMetrics
+  human_human: DeliveryModeMetrics
+  human_agent: DeliveryModeMetrics
+  agent: DeliveryModeMetrics
+  total_index: number
+  leader: DeliveryPerformanceMode | 'tie' | 'none'
+}
+
+export interface DeliveryPerformancePoint extends DeliveryPerformanceBreakdown {
+  date: string
+}
+
 export interface DeliveryQualityPoint {
   date: string
   actions_failure_incidence?: number
@@ -350,6 +365,10 @@ export interface DeliveryResponse {
     leader: string
   }
   velocity: DeliveryVelocityPoint[]
+  performance: {
+    daily: DeliveryPerformancePoint[]
+    overall: DeliveryPerformanceBreakdown
+  }
   raw: {
     human: DeliveryRawMetrics
     agent: DeliveryRawMetrics
@@ -380,7 +399,6 @@ export interface DeliveryResponse {
 
 export interface DeliveryFilters {
   organizationId?: number
-  repositoryId?: number
   excludeDead?: boolean
   from?: string
   to?: string
@@ -428,7 +446,6 @@ export function getDashboard(signal?: AbortSignal): Promise<DashboardResponse> {
 function deliveryQuery(filters: DeliveryFilters) {
   const query = new URLSearchParams()
   if (filters.organizationId) query.set('organization_id', String(filters.organizationId))
-  if (filters.repositoryId) query.set('repository_id', String(filters.repositoryId))
   if (filters.excludeDead) query.set('exclude_dead', 'true')
   if (filters.from) query.set('from', filters.from)
   if (filters.to) query.set('to', filters.to)

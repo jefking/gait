@@ -6,7 +6,6 @@ import {
   getDashboard,
   getIdentities,
   getInsightDelivery,
-  getInsightNetwork,
   isSyncActive,
   startSync,
   subscribeToDashboardEvents,
@@ -14,7 +13,6 @@ import {
   type ActorKind,
   type DeliveryResponse,
   type IdentitySummary,
-  type NetworkResponse,
   updateIdentity as updateIdentityClassification,
 } from './lib/api'
 
@@ -37,13 +35,11 @@ function App() {
   const [submitting, setSubmitting] = useState(false)
 
   const [ownerId, setOwnerId] = useState<number>()
-  const [repositoryId, setRepositoryId] = useState<number>()
   const [excludeDead, setExcludeDead] = useState(false)
   const [dateRange, setDateRange] = useState<{ from: string; to: string; userSelected: boolean }>()
   const [insightEpoch, setInsightEpoch] = useState(0)
   const [identityResult, setIdentityResult] = useState<KeyedResult<IdentitySummary[]>>()
   const [deliveryResult, setDeliveryResult] = useState<KeyedResult<DeliveryResponse>>()
-  const [networkResult, setNetworkResult] = useState<KeyedResult<NetworkResponse>>()
 
   const contentGenerationRef = useRef('')
   const pendingContentGenerationRef = useRef('')
@@ -116,7 +112,7 @@ function App() {
   const selectedFrom = dateRange?.from
   const selectedTo = dateRange?.to
   const insightScopeKey = dashboard?.snapshot
-    ? [ownerId ?? '', repositoryId ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? ''].join(':')
+    ? [ownerId ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? ''].join(':')
     : ''
   const insightRequestKey = insightScopeKey && contentGeneration
     ? `${contentGeneration}:${insightEpoch}:${insightScopeKey}`
@@ -193,27 +189,25 @@ function App() {
   useEffect(() => {
     if (!insightRequestKey) return
     const controller = new AbortController()
-    const filters = { organizationId: ownerId, repositoryId, excludeDead, from: selectedFrom, to: selectedTo }
+    const filters = { organizationId: ownerId, excludeDead, from: selectedFrom, to: selectedTo }
     Promise.all([
       getInsightDelivery(filters, controller.signal),
-      getInsightNetwork(filters, controller.signal),
       getIdentities(filters, controller.signal),
     ])
-      .then(([delivery, network, identityResponse]) => {
+      .then(([delivery, identityResponse]) => {
         setDeliveryResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: delivery })
-        setNetworkResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: network })
         setIdentityResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: identityResponse.identities })
         if (delivery.meta.available_from && delivery.meta.available_to) {
           setDateRange((current) =>
             current?.userSelected
               ? {
                   from: delivery.meta.from ?? current.from,
-                  to: delivery.meta.to ?? current.to,
+                  to: delivery.meta.available_to!,
                   userSelected: true,
                 }
               : {
                   from: delivery.meta.from ?? delivery.meta.available_from!,
-                  to: delivery.meta.to ?? delivery.meta.available_to!,
+                  to: delivery.meta.available_to!,
                   userSelected: false,
                 },
           )
@@ -222,12 +216,11 @@ function App() {
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
         setDeliveryResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
-        setNetworkResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
         setIdentityResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
         setDashboardError(error instanceof Error ? error.message : 'Could not load team delivery evidence.')
       })
     return () => controller.abort()
-  }, [insightRequestKey, insightScopeKey, ownerId, repositoryId, excludeDead, selectedFrom, selectedTo])
+  }, [insightRequestKey, insightScopeKey, ownerId, excludeDead, selectedFrom, selectedTo])
 
   const connect = async (pat: string) => {
     setSubmitting(true)
@@ -260,18 +253,8 @@ function App() {
 
   const changeOrganization = useCallback((id?: number) => {
     setOwnerId(id)
-    setRepositoryId(undefined)
     setDateRange(undefined)
   }, [])
-
-  const changeRepository = useCallback((id?: number) => {
-    setRepositoryId(id)
-    if (id) {
-      const repository = dashboard?.snapshot?.repositories.find((candidate) => candidate.id === id)
-      if (repository) setOwnerId(repository.owner.id)
-    }
-    setDateRange(undefined)
-  }, [dashboard?.snapshot?.repositories])
 
   const changeIdentity = useCallback((key: string, update: { kind?: ActorKind; display_name?: string; canonical_key?: string; unmerge?: boolean }) => {
     void updateIdentityClassification(key, update)
@@ -287,19 +270,15 @@ function App() {
           snapshot={dashboard.snapshot}
           sync={dashboard.sync}
           delivery={deliveryResult?.scopeKey === insightScopeKey ? deliveryResult.data : null}
-          network={networkResult?.scopeKey === insightScopeKey ? networkResult.data : null}
           deliveryLoading={deliveryResult?.scopeKey !== insightScopeKey}
-          networkLoading={networkResult?.scopeKey !== insightScopeKey}
           refreshing={Boolean(insightRequestKey) && deliveryResult?.key !== insightRequestKey}
           identities={identities}
           identitiesLoading={identitiesLoading}
           ownerId={ownerId}
-          repositoryId={repositoryId}
           excludeDead={excludeDead}
           dateFrom={dateRange?.from}
           dateTo={dateRange?.to}
           onOwnerChange={changeOrganization}
-          onRepositoryChange={changeRepository}
           onDateRangeChange={changeDateRange}
           onIdentityChange={changeIdentity}
           onRefresh={() => void refresh()}
@@ -337,9 +316,6 @@ function App() {
         excludeDead={excludeDead}
         onExcludeDeadChange={(next) => {
           setExcludeDead(next)
-          if (next && dashboard?.snapshot?.repositories.find((repository) => repository.id === repositoryId)?.liveness?.is_dead) {
-            setRepositoryId(undefined)
-          }
         }}
         onSubmit={connect}
         onViewCached={() => {

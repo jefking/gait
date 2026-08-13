@@ -11,13 +11,12 @@ describe('API client', () => {
     vi.stubGlobal('fetch', fetchMock)
     const scope = {
       organizationId: 7,
-      repositoryId: 9,
       excludeDead: true,
       from: '2024-01-02',
       to: '2024-03-04',
     }
     await Promise.all([getInsightDelivery(scope), getInsightNetwork(scope), getIdentities(scope)])
-    const query = 'organization_id=7&repository_id=9&exclude_dead=true&from=2024-01-02&to=2024-03-04'
+    const query = 'organization_id=7&exclude_dead=true&from=2024-01-02&to=2024-03-04'
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       `/api/insights/delivery?${query}`,
       `/api/insights/network?${query}`,

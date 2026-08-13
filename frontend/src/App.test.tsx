@@ -19,6 +19,10 @@ const emptyDelivery: DeliveryResponse = {
   meta: { available_from: '2024-01-01', available_to: '2025-01-01', from: '2024-01-01', to: '2025-01-01', granularity: 'week', scope: { exclude_dead: false }, coverage: { organizations: 1, repositories: 1, index_eligible_repositories: 1, merged_pull_requests: 1, attributed_pull_requests: 1, unattributed_pull_requests: 0, detailed_pull_requests: 1, complete_commit_evidence_pull_requests: 1, truncated_commit_evidence_pull_requests: 0, attribution_rate: 1, actions_runs: 0, actions_covered_pull_requests: 0, actions_permission_denied: false, actions_truncated: false, direct_commit_coverage: true, low_confidence_baseline: false } },
   summary: { narrative: 'Team velocity is 18% above its opening pace. Quality is stable or inconclusive.', velocity_vs_baseline: .18, agent_associated_share: .42, quality_direction: 'stable/inconclusive', leader: 'Collaborative' },
   velocity: [{ date: '2024-01-01', complete: true, total_index: 100, human: { index: 50, merged_pull_requests: 1, additions: 8, deletions: 2, changed_lines: 10, commits: 1, direct_commits: 0 }, agent: { index: 20, merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, collaborative: { index: 30, merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 } }],
+  performance: {
+    daily: [{ date: '2024-01-01', leader: 'human_agent', total_index: 100, human: { index: 10, merged_pull_requests: 1, additions: 1, deletions: 0, changed_lines: 1, commits: 1, direct_commits: 0 }, human_human: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 }, human_agent: { index: 50, merged_pull_requests: 2, additions: 5, deletions: 0, changed_lines: 5, commits: 2, direct_commits: 0 }, agent: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 } }],
+    overall: { leader: 'human_agent', total_index: 100, human: { index: 10, merged_pull_requests: 1, additions: 1, deletions: 0, changed_lines: 1, commits: 1, direct_commits: 0 }, human_human: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 }, human_agent: { index: 50, merged_pull_requests: 2, additions: 5, deletions: 0, changed_lines: 5, commits: 2, direct_commits: 0 }, agent: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 } },
+  },
   raw: { human: { merged_pull_requests: 1, additions: 8, deletions: 2, changed_lines: 10, commits: 1, direct_commits: 0 }, agent: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, collaborative: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, total: { merged_pull_requests: 1, additions: 8, deletions: 2, changed_lines: 10, commits: 1, direct_commits: 0 } },
   quality: { direction: 'stable/inconclusive', signals: [], points: [] },
   flow: { summary: { as_of: '2025-01-01', open_pull_requests: 0, merged_pull_request_sample: 1 }, points: [] },
@@ -36,7 +40,13 @@ describe('App delivery rehaul', () => {
     expect(screen.getAllByText('Team delivery evidence').length).toBeGreaterThan(0)
     expect(screen.getByText('Agent-impact evidence')).toBeInTheDocument()
     expect(screen.getByText('Is quality going up or down?')).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'octo-org/hello-world' })).toBeInTheDocument()
+    expect(screen.getByText('Daily and overall leaders')).toBeInTheDocument()
+    expect((await screen.findAllByText('Human + Human')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Human + Agent').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Collaboration network')).not.toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'octo-org' })).toBeVisible()
+    expect(screen.queryByLabelText('Repository')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Dead-project settings' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Visit Molten.bot' })).toHaveAttribute('href', 'https://molten.bot')
     expect(screen.getByRole('link', { name: 'Visit Molten.bot' })).toHaveAttribute('target', '_blank')
     expect(screen.queryByText(/Who leads this period/)).not.toBeInTheDocument()
@@ -51,20 +61,19 @@ describe('App delivery rehaul', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => url === '/api/sync' && init?.body === JSON.stringify({}))).toBe(true))
   })
 
-  it('sends the same global scope to delivery, network, and identities', async () => {
+  it('sends the same global scope to delivery and identities without loading the obsolete network', async () => {
     const fetchMock = mockAPI(); vi.stubGlobal('fetch', fetchMock); render(<App />)
     await screen.findByText('Shipped velocity by work mode')
-    fireEvent.click(screen.getByRole('button', { name: 'Organization All organizations' }))
-    fireEvent.click(screen.getByRole('option', { name: 'octo-org' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'octo-org' }))
     await waitFor(() => {
       const scoped = fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes('organization_id=1'))
       expect(scoped.some((url) => url.startsWith('/api/insights/delivery'))).toBe(true)
-      expect(scoped.some((url) => url.startsWith('/api/insights/network'))).toBe(true)
       expect(scoped.some((url) => url.startsWith('/api/identities'))).toBe(true)
+      expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/insights/network'))).toBe(false)
     })
   })
 
-  it('limits repository choices to the selected organization', async () => {
+  it('keeps organizations visible and selects exactly one', async () => {
     const dashboard = structuredClone(cachedDashboard)
     dashboard.snapshot!.owners.push({
       ...dashboard.snapshot!.owners[0],
@@ -76,16 +85,26 @@ describe('App delivery rehaul', () => {
       full_name: 'second-org/hello-world',
       owner: { ...dashboard.snapshot!.repositories[0].owner, id: 2, login: 'second-org' },
     })
-    vi.stubGlobal('fetch', mockAPI(dashboard))
+    const fetchMock = mockAPI(dashboard)
+    vi.stubGlobal('fetch', fetchMock)
     render(<App />)
     await screen.findByText('Shipped velocity by work mode')
-    expect(screen.getByRole('option', { name: 'second-org/hello-world' })).toBeInTheDocument()
+    const first = screen.getByRole('radio', { name: 'octo-org' })
+    const second = screen.getByRole('radio', { name: 'second-org' })
+    expect(first).toBeVisible()
+    expect(second).toBeVisible()
+    fireEvent.click(first)
+    expect(first).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(second)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Organization All organizations' }))
-    fireEvent.click(screen.getByRole('option', { name: 'octo-org' }))
-
-    expect(screen.getByRole('option', { name: 'octo-org/hello-world' })).toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: 'second-org/hello-world' })).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(first).toHaveAttribute('aria-checked', 'false')
+      expect(second).toHaveAttribute('aria-checked', 'true')
+      const scoped = fetchMock.mock.calls.map(([url]) => String(url))
+        .filter((url) => url.includes('organization_id=2'))
+      expect(scoped.some((url) => url.startsWith('/api/insights/delivery'))).toBe(true)
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('organization_id=1&organization_id=2'))).toBe(false)
+    })
   })
 
   it('unmounts stale delivery content immediately when scope changes', async () => {
