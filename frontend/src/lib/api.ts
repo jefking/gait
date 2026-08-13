@@ -25,7 +25,7 @@ export interface SyncStatus {
 export interface RepositoryWorkflow {
   repository_id: number
   full_name: string
-  stage: 'updating_git' | 'analyzing' | 'pull_requests' | 'publishing'
+  stage: 'updating_git' | 'analyzing' | 'pull_requests' | 'delivery_evidence' | 'publishing'
   message: string
 }
 
@@ -162,49 +162,9 @@ export interface DashboardResponse {
   sync: SyncStatus
 }
 
-export type ActivityGroup = 'owner' | 'contributor'
-export type ActivityMetric = 'commits' | 'pull_requests'
 export type ActivityGranularity = 'day' | 'week' | 'month'
 
-export interface ActivityPoint {
-  date?: string
-  month?: string
-  value: number
-}
-
-export interface ActivitySeries {
-  key: string
-  label: string
-  avatar_url?: string
-  total: number
-  points: ActivityPoint[]
-}
-
-export interface ActivityResponse {
-  group_by: ActivityGroup
-  metric: ActivityMetric
-  granularity?: ActivityGranularity
-  available_from?: string
-  available_to?: string
-  from?: string
-  to?: string
-  series: ActivitySeries[]
-}
-
-export interface ActivityOptions {
-  groupBy: ActivityGroup
-  metric: ActivityMetric
-  ownerId?: number
-  repositoryId?: number
-  excludeDead?: boolean
-  from?: string
-  to?: string
-}
-
 export type ActorKind = 'human' | 'agent' | 'unknown'
-export type WorkKind = 'human_only' | 'agent_only' | 'mixed' | 'unknown'
-export type RankCohort = 'agents' | 'humans' | 'human_agent' | 'human_human'
-export type RankMetric = 'commits' | 'pull_requests' | 'revert_rate' | 'retained_line_rate' | 'interaction_days' | 'handoffs' | 'review_interactions'
 
 export interface InsightCoverage {
   total_commits: number
@@ -246,59 +206,6 @@ export interface IdentitySummary {
   reviews: number
 }
 
-export interface InsightSummary {
-  agent_participation: number
-  handoff_lift?: number
-  handoff_episodes: number
-  quality_direction?: number
-  strongest_pair?: string
-  strongest_pair_days: number
-}
-
-export interface TimelinePoint {
-  date: string
-  human_only: number
-  agent_only: number
-  mixed: number
-  unknown: number
-  pull_requests: number
-}
-
-export interface QualityPoint {
-  date: string
-  revert_rate?: number
-  merge_rate?: number
-  median_merge_hours?: number
-  review_coverage?: number
-  retained_line_rate?: number
-  commit_sample: number
-  pull_request_sample: number
-  retention_sample?: number
-}
-
-export interface PulsePoint {
-  date: string
-  human_only: number
-  agent_only: number
-  mixed: number
-  unknown: number
-}
-
-export interface RepositoryPulse {
-  repository_id: number
-  name: string
-  total: number
-  points: PulsePoint[]
-}
-
-export interface OverviewResponse {
-  meta: InsightMeta
-  summary: InsightSummary
-  timeline: TimelinePoint[]
-  quality: QualityPoint[]
-  repositories: RepositoryPulse[]
-}
-
 export interface NetworkNode extends IdentitySummary {
   activity: number
 }
@@ -323,82 +230,160 @@ export interface NetworkResponse {
   total_identities: number
 }
 
-export interface RampPoint {
-  key: string
-  human: IdentitySummary
-  agent: IdentitySummary
-  episodes: number
-  completed_episodes: number
-  interaction_days: number
-  baseline: number
-  after: number
-  absolute_change: number
-  observed_lift?: number
-  quality_delta?: number
-  mature: boolean
-  rank_eligible: boolean
+export interface DeliveryCoverage {
+  organizations: number
+  repositories: number
+  index_eligible_repositories: number
+  merged_pull_requests: number
+  attributed_pull_requests: number
+  unattributed_pull_requests: number
+  detailed_pull_requests: number
+  complete_commit_evidence_pull_requests: number
+  truncated_commit_evidence_pull_requests: number
+  attribution_rate: number
+  actions_runs: number
+  actions_covered_pull_requests: number
+  actions_permission_denied: boolean
+  actions_truncated: boolean
+  direct_commit_coverage: boolean
+  low_confidence_baseline: boolean
 }
 
-export interface AdoptionPoint {
-  repository_id: number
-  repository: string
-  adopted_at: string
-  baseline: number
-  after: number
-  absolute_change: number
-  observed_lift?: number
-  quality_delta?: number
-  mature: boolean
+export interface DeliveryMeta {
+  available_from?: string
+  available_to?: string
+  from?: string
+  to?: string
+  granularity?: ActivityGranularity
+  scope: {
+    organization_id?: number
+    organization?: string
+    repository_id?: number
+    repository?: string
+    exclude_dead: boolean
+  }
+  coverage: DeliveryCoverage
+  unavailable?: string[]
 }
 
-export interface RampResponse {
-  meta: InsightMeta
-  handoffs: RampPoint[]
-  adoptions: AdoptionPoint[]
+export interface DeliveryRawMetrics {
+  merged_pull_requests: number
+  additions: number
+  deletions: number
+  changed_lines: number
+  commits: number
+  direct_commits: number
 }
 
-export interface RankEntry {
+export interface DeliveryModeMetrics extends DeliveryRawMetrics { index: number }
+
+export interface DeliveryVelocityPoint {
+  date: string
+  human: DeliveryModeMetrics
+  agent: DeliveryModeMetrics
+  collaborative: DeliveryModeMetrics
+  total_index: number
+  complete: boolean
+}
+
+export interface DeliveryQualityPoint {
+  date: string
+  actions_failure_incidence?: number
+  actions_pull_sample: number
+  failed_actions_attempts: number
+  total_actions_attempts: number
+  revert_rate?: number
+  commit_sample: number
+  review_coverage?: number
+  review_sample: number
+  retained_line_rate?: number
+  retention_sample: number
+  median_merge_hours?: number
+  p90_merge_hours?: number
+  merge_time_sample: number
+}
+
+export interface DeliveryQualitySignal {
   key: string
   label: string
-  kind?: ActorKind
-  rank: number
-  value: number
-  eligible: boolean
-  metrics: Record<string, number>
+  direction: 'improving' | 'declining' | 'inconclusive' | 'insufficient'
+  delta?: number
+  interval_low?: number
+  interval_high?: number
+  sample: number
 }
 
-export interface RankSeries {
-  key: string
-  label: string
-  points: Array<{ date: string; rank: number; value: number }>
+export interface DeliveryFlowPoint {
+  date: string
+  merged_pull_requests: number
+  median_changed_lines?: number
+  p90_changed_lines?: number
+  median_commits?: number
+  p90_commits?: number
+  median_additions?: number
+  p90_additions?: number
+  median_deletions?: number
+  p90_deletions?: number
 }
 
-export interface RankingResponse {
-  meta: InsightMeta
-  cohort: RankCohort
-  metric: RankMetric
-  favorable_direction: 'higher' | 'lower'
-  leaderboard: RankEntry[]
-  trajectories: RankSeries[]
+export interface DeliveryImpact {
+  tier: 'matched_difference_in_differences' | 'paired_pre_post' | 'insufficient_evidence'
+  verdict: string
+  estimate?: number
+  interval_low?: number
+  interval_high?: number
+  treated_repositories: number
+  control_repositories: number
+  adoption_coverage: number
+  pre_weeks: number
+  post_weeks: number
+  quality_deltas: Array<{ key: string; delta?: number; interval_low?: number; interval_high?: number; sample: number }>
 }
 
-export interface InsightFilters {
-  ownerId?: number
+export interface DeliveryResponse {
+  meta: DeliveryMeta
+  summary: {
+    narrative: string
+    velocity_vs_baseline?: number
+    agent_associated_share: number
+    quality_direction: 'improving' | 'declining' | 'mixed' | 'stable/inconclusive' | 'insufficient'
+    leader: string
+  }
+  velocity: DeliveryVelocityPoint[]
+  raw: {
+    human: DeliveryRawMetrics
+    agent: DeliveryRawMetrics
+    collaborative: DeliveryRawMetrics
+    total: DeliveryRawMetrics
+  }
+  quality: { direction: string; signals: DeliveryQualitySignal[]; points: DeliveryQualityPoint[] }
+  flow: {
+    summary: {
+      as_of: string
+      open_pull_requests: number
+      median_open_age_days?: number
+      p90_open_age_days?: number
+      median_changed_lines?: number
+      p90_changed_lines?: number
+      median_commits?: number
+      p90_commits?: number
+      median_additions?: number
+      p90_additions?: number
+      median_deletions?: number
+      p90_deletions?: number
+      merged_pull_request_sample: number
+    }
+    points: DeliveryFlowPoint[]
+  }
+  impact: DeliveryImpact
+}
+
+export interface DeliveryFilters {
+  organizationId?: number
   repositoryId?: number
-  actorKind?: ActorKind
   excludeDead?: boolean
   from?: string
   to?: string
-  sessionHours?: number
-  adoptionDays?: number
-  survivalDays?: number
-}
-
-export interface InsightBundle {
-  overview: OverviewResponse
-  network: NetworkResponse
-  ramps: RampResponse
-  rankings: RankingResponse
 }
 
 export class APIError extends Error {
@@ -440,79 +425,26 @@ export function getDashboard(signal?: AbortSignal): Promise<DashboardResponse> {
   return requestJSON<DashboardResponse>('/api/dashboard', { signal })
 }
 
-export function getActivity(
-  options: ActivityOptions,
-  signal?: AbortSignal,
-): Promise<ActivityResponse> {
-  const query = new URLSearchParams({
-    group_by: options.groupBy,
-    metric: options.metric,
-  })
-  if (options.ownerId) query.set('owner_id', String(options.ownerId))
-  if (options.repositoryId) {
-    query.set('repository_id', String(options.repositoryId))
-  }
-  if (options.excludeDead) query.set('exclude_dead', 'true')
-  if (options.from) query.set('from', options.from)
-  if (options.to) query.set('to', options.to)
-  return requestJSON<ActivityResponse>(`/api/activity?${query}`, { signal })
-}
-
-function insightQuery(filters: InsightFilters) {
+function deliveryQuery(filters: DeliveryFilters) {
   const query = new URLSearchParams()
-  if (filters.ownerId) query.set('owner_id', String(filters.ownerId))
+  if (filters.organizationId) query.set('organization_id', String(filters.organizationId))
   if (filters.repositoryId) query.set('repository_id', String(filters.repositoryId))
-  if (filters.actorKind) query.set('actor_kind', filters.actorKind)
   if (filters.excludeDead) query.set('exclude_dead', 'true')
   if (filters.from) query.set('from', filters.from)
   if (filters.to) query.set('to', filters.to)
-  if (filters.sessionHours) query.set('session_hours', String(filters.sessionHours))
-  if (filters.adoptionDays) query.set('adoption_days', String(filters.adoptionDays))
-  if (filters.survivalDays) query.set('survival_days', String(filters.survivalDays))
   return query
 }
 
-export async function getInsights(
-  filters: InsightFilters,
-  cohort: RankCohort,
-  metric: RankMetric,
-  signal?: AbortSignal,
-): Promise<InsightBundle> {
-  const [overview, network, ramps, rankings] = await Promise.all([
-    getInsightOverview(filters, signal),
-    getInsightNetwork(filters, signal),
-    getInsightRamps(filters, signal),
-    getInsightRankings(filters, cohort, metric, signal),
-  ])
-  return { overview, network, ramps, rankings }
+export function getInsightDelivery(filters: DeliveryFilters, signal?: AbortSignal): Promise<DeliveryResponse> {
+  return requestJSON<DeliveryResponse>(`/api/insights/delivery?${deliveryQuery(filters)}`, { signal })
 }
 
-export function getInsightOverview(filters: InsightFilters, signal?: AbortSignal): Promise<OverviewResponse> {
-  return requestJSON<OverviewResponse>(`/api/insights/overview?${insightQuery(filters)}`, { signal })
+export function getInsightNetwork(filters: DeliveryFilters, signal?: AbortSignal): Promise<NetworkResponse> {
+  return requestJSON<NetworkResponse>(`/api/insights/network?${deliveryQuery(filters)}`, { signal })
 }
 
-export function getInsightNetwork(filters: InsightFilters, signal?: AbortSignal): Promise<NetworkResponse> {
-  return requestJSON<NetworkResponse>(`/api/insights/network?${insightQuery(filters)}`, { signal })
-}
-
-export function getInsightRamps(filters: InsightFilters, signal?: AbortSignal): Promise<RampResponse> {
-  return requestJSON<RampResponse>(`/api/insights/ramps?${insightQuery(filters)}`, { signal })
-}
-
-export function getInsightRankings(
-  filters: InsightFilters,
-  cohort: RankCohort,
-  metric: RankMetric,
-  signal?: AbortSignal,
-): Promise<RankingResponse> {
-  const query = insightQuery(filters)
-  query.set('cohort', cohort)
-  query.set('metric', metric)
-  return requestJSON<RankingResponse>(`/api/insights/rankings?${query}`, { signal })
-}
-
-export function getIdentities(signal?: AbortSignal): Promise<{ identities: IdentitySummary[] }> {
-  return requestJSON<{ identities: IdentitySummary[] }>('/api/identities', { signal })
+export function getIdentities(filters: DeliveryFilters = {}, signal?: AbortSignal): Promise<{ identities: IdentitySummary[] }> {
+  return requestJSON<{ identities: IdentitySummary[] }>(`/api/identities?${deliveryQuery(filters)}`, { signal })
 }
 
 export function updateIdentity(

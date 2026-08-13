@@ -5,22 +5,16 @@ import { TokenModal } from './components/TokenModal'
 import {
   getDashboard,
   getIdentities,
+  getInsightDelivery,
   getInsightNetwork,
-  getInsightOverview,
-  getInsightRamps,
-  getInsightRankings,
   isSyncActive,
   startSync,
   subscribeToDashboardEvents,
   type DashboardResponse,
   type ActorKind,
+  type DeliveryResponse,
   type IdentitySummary,
   type NetworkResponse,
-  type OverviewResponse,
-  type RankCohort,
-  type RankMetric,
-  type RankingResponse,
-  type RampResponse,
   updateIdentity as updateIdentityClassification,
 } from './lib/api'
 
@@ -45,17 +39,11 @@ function App() {
   const [ownerId, setOwnerId] = useState<number>()
   const [repositoryId, setRepositoryId] = useState<number>()
   const [excludeDead, setExcludeDead] = useState(false)
-  const [actorKind, setActorKind] = useState<ActorKind>()
   const [dateRange, setDateRange] = useState<{ from: string; to: string; userSelected: boolean }>()
-  const [windows, setWindows] = useState({ sessionHours: 72, adoptionDays: 30, survivalDays: 30 })
-  const [rankCohort, setRankCohort] = useState<RankCohort>('agents')
-  const [rankMetric, setRankMetric] = useState<RankMetric>('commits')
   const [insightEpoch, setInsightEpoch] = useState(0)
-  const [identityResult, setIdentityResult] = useState<{ key: string; data: IdentitySummary[] }>()
-  const [overviewResult, setOverviewResult] = useState<KeyedResult<OverviewResponse>>()
+  const [identityResult, setIdentityResult] = useState<KeyedResult<IdentitySummary[]>>()
+  const [deliveryResult, setDeliveryResult] = useState<KeyedResult<DeliveryResponse>>()
   const [networkResult, setNetworkResult] = useState<KeyedResult<NetworkResponse>>()
-  const [rampResult, setRampResult] = useState<KeyedResult<RampResponse>>()
-  const [rankingResult, setRankingResult] = useState<KeyedResult<RankingResponse>>()
 
   const contentGenerationRef = useRef('')
   const pendingContentGenerationRef = useRef('')
@@ -125,20 +113,16 @@ function App() {
 
   const syncActive = dashboard ? isSyncActive(dashboard.sync) : false
   const snapshotGeneratedAt = dashboard?.snapshot?.generated_at
-  const identities = identityResult?.data ?? []
-  const identitiesLoading = Boolean(snapshotGeneratedAt) && !identityResult
-  const selectedFrom = dateRange?.userSelected ? dateRange.from : undefined
-  const selectedTo = dateRange?.userSelected ? dateRange.to : undefined
+  const selectedFrom = dateRange?.from
+  const selectedTo = dateRange?.to
   const insightScopeKey = dashboard?.snapshot
-    ? [ownerId ?? '', repositoryId ?? '', actorKind ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? '', windows.sessionHours, windows.adoptionDays, windows.survivalDays].join(':')
+    ? [ownerId ?? '', repositoryId ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? ''].join(':')
     : ''
   const insightRequestKey = insightScopeKey && contentGeneration
     ? `${contentGeneration}:${insightEpoch}:${insightScopeKey}`
     : ''
-  const rankingScopeKey = insightScopeKey ? `${insightScopeKey}:${rankCohort}:${rankMetric}` : ''
-  const rankingRequestKey = rankingScopeKey && contentGeneration
-    ? `${contentGeneration}:${insightEpoch}:${rankingScopeKey}`
-    : ''
+  const identities = identityResult?.scopeKey === insightScopeKey ? identityResult.data : []
+  const identitiesLoading = Boolean(snapshotGeneratedAt) && identityResult?.scopeKey !== insightScopeKey
 
   useEffect(() => {
     let cancelled = false
@@ -209,27 +193,27 @@ function App() {
   useEffect(() => {
     if (!insightRequestKey) return
     const controller = new AbortController()
-    const filters = { ownerId, repositoryId, actorKind, excludeDead, from: selectedFrom, to: selectedTo, ...windows }
+    const filters = { organizationId: ownerId, repositoryId, excludeDead, from: selectedFrom, to: selectedTo }
     Promise.all([
-      getInsightOverview(filters, controller.signal),
+      getInsightDelivery(filters, controller.signal),
       getInsightNetwork(filters, controller.signal),
-      getInsightRamps(filters, controller.signal),
+      getIdentities(filters, controller.signal),
     ])
-      .then(([overview, network, ramps]) => {
-        setOverviewResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: overview })
+      .then(([delivery, network, identityResponse]) => {
+        setDeliveryResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: delivery })
         setNetworkResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: network })
-        setRampResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: ramps })
-        if (overview.meta.available_from && overview.meta.available_to) {
+        setIdentityResult({ key: insightRequestKey, scopeKey: insightScopeKey, data: identityResponse.identities })
+        if (delivery.meta.available_from && delivery.meta.available_to) {
           setDateRange((current) =>
             current?.userSelected
               ? {
-                  from: overview.meta.from ?? current.from,
-                  to: overview.meta.to ?? current.to,
+                  from: delivery.meta.from ?? current.from,
+                  to: delivery.meta.to ?? current.to,
                   userSelected: true,
                 }
               : {
-                  from: overview.meta.from ?? overview.meta.available_from!,
-                  to: overview.meta.to ?? overview.meta.available_to!,
+                  from: delivery.meta.from ?? delivery.meta.available_from!,
+                  to: delivery.meta.to ?? delivery.meta.available_to!,
                   userSelected: false,
                 },
           )
@@ -237,38 +221,13 @@ function App() {
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        setOverviewResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
+        setDeliveryResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
         setNetworkResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
-        setRampResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
-        setDashboardError(error instanceof Error ? error.message : 'Could not load Human × Agent insights.')
+        setIdentityResult((current) => current?.scopeKey === insightScopeKey ? current : undefined)
+        setDashboardError(error instanceof Error ? error.message : 'Could not load team delivery evidence.')
       })
     return () => controller.abort()
-  }, [insightRequestKey, insightScopeKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows])
-
-  useEffect(() => {
-    if (!rankingRequestKey) return
-    const controller = new AbortController()
-    const filters = { ownerId, repositoryId, actorKind, excludeDead, from: selectedFrom, to: selectedTo, ...windows }
-    getInsightRankings(filters, rankCohort, rankMetric, controller.signal)
-      .then((rankings) => setRankingResult({ key: rankingRequestKey, scopeKey: rankingScopeKey, data: rankings }))
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') return
-        setRankingResult((current) => current?.scopeKey === rankingScopeKey ? current : undefined)
-        setDashboardError(error instanceof Error ? error.message : 'Could not load rankings.')
-      })
-    return () => controller.abort()
-  }, [rankingRequestKey, rankingScopeKey, ownerId, repositoryId, actorKind, excludeDead, selectedFrom, selectedTo, windows, rankCohort, rankMetric])
-
-  useEffect(() => {
-    if (!contentGeneration) return
-    const controller = new AbortController()
-    getIdentities(controller.signal)
-      .then((result) => setIdentityResult({ key: contentGeneration, data: result.identities }))
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === 'AbortError')) setDashboardError(error instanceof Error ? error.message : 'Could not load identities.')
-      })
-    return () => controller.abort()
-  }, [contentGeneration])
+  }, [insightRequestKey, insightScopeKey, ownerId, repositoryId, excludeDead, selectedFrom, selectedTo])
 
   const connect = async (pat: string) => {
     setSubmitting(true)
@@ -295,29 +254,30 @@ function App() {
     }
   }
 
-  const changeActorKind = useCallback((kind?: ActorKind) => {
-    setActorKind(kind)
-    if (kind === 'human') { setRankCohort('humans'); setRankMetric('commits') }
-    if (kind === 'agent') { setRankCohort('agents'); setRankMetric('commits') }
-  }, [])
-
   const changeDateRange = useCallback((from: string, to: string) => {
     setDateRange({ from, to, userSelected: true })
   }, [])
 
-  const changeRanking = useCallback((cohort: RankCohort, metric: RankMetric) => {
-    setRankCohort(cohort)
-    setRankMetric(metric)
+  const changeOrganization = useCallback((id?: number) => {
+    setOwnerId(id)
+    setRepositoryId(undefined)
+    setDateRange(undefined)
   }, [])
+
+  const changeRepository = useCallback((id?: number) => {
+    setRepositoryId(id)
+    if (id) {
+      const repository = dashboard?.snapshot?.repositories.find((candidate) => candidate.id === id)
+      if (repository) setOwnerId(repository.owner.id)
+    }
+    setDateRange(undefined)
+  }, [dashboard?.snapshot?.repositories])
 
   const changeIdentity = useCallback((key: string, update: { kind?: ActorKind; display_name?: string; canonical_key?: string; unmerge?: boolean }) => {
     void updateIdentityClassification(key, update)
-      .then((result) => {
-        setIdentityResult({ key: contentGeneration, data: result.identities })
-        setInsightEpoch((current) => current + 1)
-      })
+      .then(() => setInsightEpoch((current) => current + 1))
       .catch((error: unknown) => setDashboardError(error instanceof Error ? error.message : 'Could not update identity.'))
-  }, [contentGeneration])
+  }, [])
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -326,43 +286,21 @@ function App() {
         <DashboardView
           snapshot={dashboard.snapshot}
           sync={dashboard.sync}
-          insights={{
-            overview: overviewResult?.data ?? null,
-            network: networkResult?.data ?? null,
-            ramps: rampResult?.data ?? null,
-            rankings: rankingResult?.data ?? null,
-          }}
-          insightsLoading={{
-            overview: !overviewResult,
-            network: !networkResult,
-            ramps: !rampResult,
-            rankings: !rankingResult,
-          }}
-          insightsRefreshing={{
-            overview: Boolean(insightRequestKey) && Boolean(overviewResult) && overviewResult?.key !== insightRequestKey,
-            network: Boolean(insightRequestKey) && Boolean(networkResult) && networkResult?.key !== insightRequestKey,
-            ramps: Boolean(insightRequestKey) && Boolean(rampResult) && rampResult?.key !== insightRequestKey,
-            rankings: Boolean(rankingRequestKey) && Boolean(rankingResult) && rankingResult?.key !== rankingRequestKey,
-          }}
+          delivery={deliveryResult?.scopeKey === insightScopeKey ? deliveryResult.data : null}
+          network={networkResult?.scopeKey === insightScopeKey ? networkResult.data : null}
+          deliveryLoading={deliveryResult?.scopeKey !== insightScopeKey}
+          networkLoading={networkResult?.scopeKey !== insightScopeKey}
+          refreshing={Boolean(insightRequestKey) && deliveryResult?.key !== insightRequestKey}
           identities={identities}
           identitiesLoading={identitiesLoading}
           ownerId={ownerId}
           repositoryId={repositoryId}
-          actorKind={actorKind}
           excludeDead={excludeDead}
           dateFrom={dateRange?.from}
           dateTo={dateRange?.to}
-          sessionHours={windows.sessionHours}
-          adoptionDays={windows.adoptionDays}
-          survivalDays={windows.survivalDays}
-          rankCohort={rankCohort}
-          rankMetric={rankMetric}
-          onOwnerChange={setOwnerId}
-          onRepositoryChange={setRepositoryId}
-          onActorKindChange={changeActorKind}
+          onOwnerChange={changeOrganization}
+          onRepositoryChange={changeRepository}
           onDateRangeChange={changeDateRange}
-          onWindowsChange={setWindows}
-          onRankChange={changeRanking}
           onIdentityChange={changeIdentity}
           onRefresh={() => void refresh()}
           onSettings={() => {

@@ -37,7 +37,7 @@ export function OwnerSelect({ owners, value, onChange }: OwnerSelectProps) {
 
   return (
     <div ref={containerRef} className="relative block text-xs font-medium text-slate-500">
-      <span id="owner-filter-label">Owner</span>
+      <span id="owner-filter-label">Organization</span>
       <button
         type="button"
         aria-labelledby="owner-filter-label owner-filter-value"
@@ -54,7 +54,7 @@ export function OwnerSelect({ owners, value, onChange }: OwnerSelectProps) {
           </span>
         )}
         <span id="owner-filter-value" className="min-w-0 flex-1 truncate">
-          {selected?.owner.login ?? 'All owners'}
+          {selected?.owner.login ?? 'All organizations'}
         </span>
         <ChevronDown aria-hidden="true" className={`size-4 shrink-0 text-slate-500 transition ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -65,7 +65,7 @@ export function OwnerSelect({ owners, value, onChange }: OwnerSelectProps) {
           aria-labelledby="owner-filter-label"
           className="absolute left-0 right-0 top-full z-30 mt-2 max-h-72 overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-1.5 shadow-2xl shadow-black/50"
         >
-          <OwnerOption label="All owners" selected={!value} onClick={() => choose()} />
+          <OwnerOption label="All organizations" selected={!value} onClick={() => choose()} />
           {owners.map((owner) => (
             <OwnerOption
               key={owner.owner.id}

@@ -25,14 +25,14 @@ describe('OwnerSelect', () => {
   it('shows GitHub avatars in the list and selected control', () => {
     const change = vi.fn()
     const { rerender } = render(<OwnerSelect owners={owners} onChange={change} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Owner All owners' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Organization All organizations' }))
     const option = screen.getByRole('option', { name: 'example-org' })
     expect(option.querySelector('img')).toHaveAttribute('src', owners[0].owner.avatar_url)
     fireEvent.click(option)
     expect(change).toHaveBeenCalledWith(7)
 
     rerender(<OwnerSelect owners={owners} value={7} onChange={change} />)
-    const selected = screen.getByRole('button', { name: 'Owner example-org' })
+    const selected = screen.getByRole('button', { name: 'Organization example-org' })
     expect(selected.querySelector('img')).toHaveAttribute('src', owners[0].owner.avatar_url)
   })
 })

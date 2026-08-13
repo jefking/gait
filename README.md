@@ -1,17 +1,18 @@
 # Gait
 
-Gait is a Human × Agent engineering intelligence dashboard. It discovers every repository
-visible to a supplied GitHub personal access token, keeps an app-owned clone of
-each repository up to date, analyzes default-branch history with
+Gait is a team delivery evidence dashboard built around one question: **are
+human–agent teams shipping more software without degrading quality?** It discovers
+organization-owned repositories visible to a supplied GitHub personal access token,
+keeps an app-owned clone of each repository up to date, analyzes default-branch history with
 [`git-changes-by-day`](https://github.com/moltenbot000/git-changes-by-day), and
-combines the result with GitHub pull request history.
+combines the result with enriched GitHub pull request and GitHub Actions history.
 
-The graph-first React dashboard classifies evidence-backed human, agent, and mixed
-work; maps collaboration; compares observed human-to-agent handoffs and adoption
-windows; and shows frequency, quality proxies, repository pulses, and metric-led
-ranks over time. Unclassified actors remain in the identity registry but are excluded
-from insights until classified. The Go server performs all GitHub, Git, relationship
-analysis, caching, and background-job work.
+The dashboard reports merged-PR velocity for human, agent, and collaborative work,
+keeps raw shipped-work measures auditable, and evaluates throughput beside build,
+review, revert, retention, merge-time, and PR-flow guardrails. It has one leading
+work mode, never an individual leaderboard. Attribution uses exact participant
+evidence; unknown work remains visible as coverage but is excluded from mode indices.
+Repository telemetry is presented as observed association rather than causal proof.
 
 ## Stack
 
@@ -31,20 +32,25 @@ retained one.
 
 The server:
 
-1. Fetches the authenticated user and all repositories visible to the PAT.
+1. Fetches the authenticated user and organization-owned repositories visible to the PAT.
 2. Clones new repositories and fetches existing app-owned clones using four
    concurrent workers by default.
-3. Checks out the latest default branch and runs `git-changes-by-day`, keying commit
-   actors by a verified GitHub handle when available and normalized author email otherwise.
+3. Checks out the latest default branch and runs the pinned `git-changes-by-day`,
+   consuming its ordered structured co-author arrays and keying every commit participant
+   by a verified GitHub handle when available and normalized author email otherwise.
 4. Enriches commit events with full messages, parents, and touched paths, then
    publishes commit statistics immediately.
-5. Fetches pull requests and review evidence on first use and only updated pull
-   requests later.
-6. Publishes the enriched repository again and atomically persists each
+5. Fetches pull requests, reviews, additions, deletions, changed files, commit counts,
+   merge SHAs, and up to 250 commit/co-author records on first use, then enriches only
+   new or updated pull requests.
+6. Fetches PR-triggered GitHub Actions runs in calendar partitions, retaining rerun
+   attempts, ETags, permission coverage, and freshness. Dense partitions split before
+   GitHub's 1,000-result search cap.
+7. Publishes the enriched repository again and atomically persists each
    incremental dashboard snapshot.
 
 Repository workers expose their current `updating_git`, `analyzing`,
-`pull_requests`, and `publishing` workflow step. The frontend receives
+`pull_requests`, `delivery_evidence`, and `publishing` workflow step. The frontend receives
 server-sent invalidation events and refreshes the canonical dashboard/insight
 APIs as each step completes; slower polling remains as a reconnect fallback.
 
@@ -73,10 +79,12 @@ exposed beyond a trusted local network.
 ### PAT access
 
 A fine-grained PAT should grant read access to repository metadata, contents,
-and pull requests (including reviews) for every repository to include.
+pull requests (including reviews), and Actions for every repository to include.
 Organization repositories may require SSO authorization. A token can only discover repositories that the
 token itself is authorized to access. Repositories without pull-request read
-permission remain visible, with PR statistics marked unavailable.
+permission remain visible, with PR statistics marked unavailable. Missing Actions
+permission preserves velocity and all non-build insights while explicitly marking
+GitHub Actions coverage unavailable.
 
 ## Local development
 
@@ -90,7 +98,7 @@ Requirements:
 Install the analyzer pinned by the production image:
 
 ```sh
-go install github.com/moltenbot000/git-changes-by-day@92df0c374280bc4481d6e81a547a796572e72353
+go install github.com/moltenbot000/git-changes-by-day@3a591122a07574b6930d79343e6a8b40bb37e7b9
 ```
 
 Start the API:
@@ -139,44 +147,46 @@ with access to the Docker daemon can inspect container environment variables.
 | --- | --- | --- |
 | `GET` | `/api/health` | Liveness check |
 | `GET` | `/api/dashboard` | Latest snapshot and current sync status |
-| `GET` | `/api/activity` | Adaptive owner or contributor activity |
-| `GET` | `/api/insights/overview` | Human/agent timeline, quality proxies, coverage, and repository pulse |
+| `GET` | `/api/insights/delivery` | Scoped velocity, raw measures, quality, flow, impact uncertainty, and coverage |
 | `GET` | `/api/insights/network` | Evidence-separated collaboration identities and edges |
-| `GET` | `/api/insights/ramps` | Human→agent handoff and repository adoption comparisons |
-| `GET` | `/api/insights/rankings` | Metric-led individual or pair ranks and trajectories |
-| `GET` | `/api/identities` | Detected identity classifications and evidence |
+| `GET` | `/api/identities` | Scoped identity classifications and evidence |
 | `PATCH` | `/api/identities/{key}` | Persist a classification, display, or alias override |
 | `GET` | `/api/events` | Live server-sent dashboard invalidations |
 | `POST` | `/api/sync` | Start a background sync; `{ "pat": "…" }` replaces the in-memory token, while `{}` reuses it |
 
-`/api/activity` accepts `group_by=owner|contributor`,
-`metric=commits|pull_requests`, optional numeric `owner_id` and
-`repository_id` filters, and optional UTC `from`/`to` dates in `YYYY-MM-DD`
-format. Responses include the oldest/latest available dates and automatically
-use daily buckets for ranges up to 62 days, weekly buckets up to two years,
-and monthly buckets for longer histories.
-
-The insight endpoints share optional `owner_id`, `repository_id`,
-`actor_kind=human|agent`, `from`, `to`, `session_hours`,
-`adoption_days`, `survival_days`, and `exclude_dead=true|false` filters. Session windows
-accept 1–168 hours; adoption and survival windows accept 7–180 days. Rankings
-also accept `cohort=agents|humans|human_agent|human_human` and a transparent
-metric such as `commits`, `interaction_days`, `handoffs`, or `revert_rate`.
+Delivery, network, and identity reads share exactly the same optional
+`organization_id`, `repository_id`, `from`, `to`, and
+`exclude_dead=true|false` query. Dates use UTC `YYYY-MM-DD`. A repository always
+implies its organization, and repository selectors are limited to that organization.
+Responses automatically use daily buckets for ranges up to 62 days, weekly buckets
+up to two years, and monthly buckets for longer histories. Personal repositories are
+not synced or returned; existing personal-repository cache files are left untouched.
 
 ### Attribution and interpretation
 
-Agent attribution uses exact GitHub Bot/App evidence, known agent co-author
-signatures, and user-maintained overrides. It does not guess from prose or code
-style. Git identities that cannot be verified remain `unknown`; work performed
-by an agent under a human identity without a recognizable trailer cannot be
-detected automatically.
+The shipped unit is a merged PR, assigned to its merge date. Known PR authors,
+reviews submitted before merge, commit authors, recognized co-authors, and
+user-maintained overrides determine `human`, `agent`, or `collaborative` mode.
+Structured co-author fields from `git-changes-by-day` are authoritative for refreshed
+commit reports; full-message trailer parsing remains only for older reports. Agent
+attribution uses exact GitHub Bot/App or known-signature evidence and never
+guesses from prose, code style, or code volume. Fully unknown PRs are excluded and
+reported as attribution coverage.
 
-Collaboration links come from co-authorship, PR reviews, and alternating commits
-inside a same-repository session. Ramp-up values are observed before/after
-associations, not causal productivity claims. Quality is shown as separate
-proxies—reverts, resolved-PR merge rate, time-to-merge, review coverage, and,
-when enriched maturity analysis is available, retained lines—never as a single
-opaque score.
+For each repository, the first four complete adaptive periods establish baseline
+means. Each mode contributes `100 × [0.5 × mode PRs / baseline total PRs + 0.5 ×
+mode changed lines / baseline total changed lines]`; an available dimension receives
+full weight if the other denominator is zero. Changed lines are additions plus
+deletions. Commit count is batch context and never increases the index. Organization
+views equal-weight repository indices so a large repository cannot dominate unrelated
+delivery systems.
+
+Impact uses fixed eight-week windows on either side of the first confirmed
+agent-involved merge and excludes adoption week. Three treated repositories with two
+matched same-organization, no-agent controls each enable deterministic, bootstrapped
+difference-in-differences; otherwise the API returns a paired pre/post association or
+insufficient evidence. Quality deltas remain separate. Collaboration links retain
+co-authorship, review, and handoff evidence without ranked pair lists.
 
 ## Configuration
 
@@ -219,11 +229,12 @@ go tool cover -func=coverage.out
 This test suite does not currently provide 100% backend statement coverage. At
 the time of this change, the command above reports 75.6% overall (92.5% for
 `internal/api`, 74.9% for `internal/dashboard`, and 0% for `cmd/server`). The
-focused tests cover insight contracts, API validation failures, GitHub error
-handling, and identity persistence; server lifecycle, repository process
+focused tests cover delivery-index invariants, attribution, quality sample gates,
+controlled impact eligibility, API validation failures, GitHub error handling, and
+identity persistence; server lifecycle, repository process
 failures, and several background-sync branches remain coverage gaps.
 
 Commit statistics intentionally cover only commits reachable from the latest
-default branch. Other branches, tags, submodules, and Git LFS contents are out
-of scope. PR history is counted by author and creation month; open, closed, and
-merged totals represent current status.
+default branch. Other branches, tags, submodules, Git LFS contents, and CI providers
+outside GitHub Actions are out of scope. Direct default-branch commits are shown
+separately and excluded from PR-based shipped velocity.

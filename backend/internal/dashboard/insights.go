@@ -296,6 +296,40 @@ func (manager *Manager) InsightRankings(query InsightQuery) (RankingResponse, er
 
 func (manager *Manager) Identities() IdentityResponse {
 	reports, overrides := manager.insightState()
+	return buildIdentityResponse(reports, overrides)
+}
+
+func (manager *Manager) ScopedIdentities(query InsightQuery) IdentityResponse {
+	reports, overrides := manager.insightState()
+	selected := make(map[int64]RepositoryReport)
+	for id, report := range reports {
+		if deliveryReportMatches(report, query) {
+			if query.From != nil && query.To != nil {
+				events := make([]CommitEvent, 0, len(report.Commits.Events))
+				for _, event := range report.Commits.Events {
+					if inInsightRange(event.CommittedAt, query) {
+						events = append(events, event)
+					}
+				}
+				report.Commits.Events = events
+				if report.Pulls != nil {
+					pulls := make([]PullRequest, 0, len(report.Pulls.PullRequests))
+					for _, pull := range report.Pulls.PullRequests {
+						if pull.MergedAt != nil && inInsightRange(*pull.MergedAt, query) {
+							pulls = append(pulls, pull)
+						}
+					}
+					stats := BuildPullStats(pulls)
+					report.Pulls = &stats
+				}
+			}
+			selected[id] = report
+		}
+	}
+	return buildIdentityResponse(selected, overrides)
+}
+
+func buildIdentityResponse(reports map[int64]RepositoryReport, overrides map[string]IdentityOverride) IdentityResponse {
 	catalog := buildIdentityCatalog(reports, overrides)
 	identities := make([]IdentitySummary, 0, len(catalog))
 	for _, identity := range catalog {
@@ -652,6 +686,7 @@ func knownAgentIdentity(value string) bool {
 		"codex": {}, "openai codex": {}, "codex@openai.com": {},
 		"github copilot": {}, "copilot": {}, "copilot@github.com": {},
 		"cursor": {}, "cursor agent": {}, "devin": {}, "devin-ai-integration[bot]": {},
+		"moltenbot000": {}, "molten bot 000": {}, "moltenhub-bot": {},
 		"dependabot": {}, "dependabot[bot]": {}, "renovate[bot]": {}, "github-actions[bot]": {},
 	}
 	_, exists := known[value]
@@ -756,10 +791,22 @@ func mergeIdentityMetadata(identity *IdentitySummary, person ContributorMetrics)
 }
 
 func commitCoauthors(message string) []ContributorMetrics {
-	matches := coauthorPattern.FindAllStringSubmatch(message, -1)
-	result := make([]ContributorMetrics, 0, len(matches))
+	lines := strings.Split(strings.TrimRight(message, " \t\r\n"), "\n")
+	start := len(lines)
+	for start > 0 && isCommitTrailerLine(lines[start-1]) {
+		start--
+	}
+	if start == len(lines) || start > 0 && strings.TrimSpace(lines[start-1]) != "" {
+		return nil
+	}
+
+	result := make([]ContributorMetrics, 0, len(lines)-start)
 	seen := make(map[string]struct{})
-	for _, match := range matches {
+	for _, line := range lines[start:] {
+		match := coauthorPattern.FindStringSubmatch(line)
+		if len(match) != 3 {
+			continue
+		}
 		name, email := strings.TrimSpace(match[1]), strings.ToLower(strings.TrimSpace(match[2]))
 		key, login := "email:"+email, ""
 		if at := strings.Index(email, "@users.noreply.github.com"); at > 0 {
@@ -781,6 +828,24 @@ func commitCoauthors(message string) []ContributorMetrics {
 		result = append(result, ContributorMetrics{Key: key, Login: login, Name: name, Type: identityType})
 	}
 	return result
+}
+
+func isCommitTrailerLine(line string) bool {
+	if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+		return false
+	}
+	key, _, found := strings.Cut(line, ":")
+	key = strings.TrimSpace(key)
+	if !found || key == "" {
+		return false
+	}
+	for _, character := range key {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func personMetrics(person Person) ContributorMetrics {

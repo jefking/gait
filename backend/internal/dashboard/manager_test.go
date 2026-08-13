@@ -110,6 +110,37 @@ func TestManagerPublishesCommitDataBeforePullRequestStepCompletes(t *testing.T) 
 	}
 }
 
+func TestManagerNeverSchedulesPersonalRepositories(t *testing.T) {
+	organization := fakeRepository(1, "organization-repo")
+	personal := fakeRepository(2, "personal-repo")
+	personal.FullName, personal.Owner = "person/personal-repo", OwnerIdentity{ID: 20, Login: "person", Type: "User"}
+	runner := &fakeRepositoryRunner{}
+	manager, err := NewManager(ManagerConfig{
+		DataDir: t.TempDir(), Runner: runner,
+		GitHubFactory: func(_ string, _ RateLimitCallbacks) (GitHubService, error) {
+			return &fakeGitHubService{repositories: []Repository{organization, personal}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if _, err := manager.Start("token"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSync(t, manager)
+	response := manager.Dashboard()
+	if response.Snapshot == nil || len(response.Snapshot.Repositories) != 1 || response.Snapshot.Repositories[0].ID != organization.ID || response.Snapshot.Totals.Repositories != 1 {
+		t.Fatalf("personal repository entered the dashboard: %+v", response.Snapshot)
+	}
+	runner.mu.Lock()
+	clones := runner.clones
+	runner.mu.Unlock()
+	if clones != 1 {
+		t.Fatalf("scheduled %d repositories, want only the organization repository", clones)
+	}
+}
+
 type fakeRepositoryRunner struct {
 	mu      sync.Mutex
 	clones  int
@@ -134,7 +165,7 @@ func (runner *fakeRepositoryRunner) Analyze(_ context.Context, repositoryPath, o
 	}
 	writer := csv.NewWriter(file)
 	_ = writer.Write(commitCSVHeader)
-	_ = writer.Write([]string{"2024-01-02T03:04:05Z", "2024-01-02", filepath.Base(repositoryPath), "1208574+octocat@users.noreply.github.com", "octocat", "The Octocat", "commit", "1", "2", "1", "3"})
+	_ = writer.Write([]string{"2024-01-02T03:04:05Z", "2024-01-02", filepath.Base(repositoryPath), "1208574+octocat@users.noreply.github.com", "octocat", "The Octocat", "commit", "1", "2", "1", "3", "[]", "[]", "[]"})
 	writer.Flush()
 	if err := writer.Error(); err != nil {
 		_ = file.Close()

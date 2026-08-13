@@ -49,6 +49,10 @@ func (store *Store) analysisPath(repositoryID int64) string {
 	return filepath.Join(store.reportDir(repositoryID), "analysis.json")
 }
 
+func (store *Store) actionsPath(repositoryID int64) string {
+	return filepath.Join(store.reportDir(repositoryID), "actions.json")
+}
+
 func (store *Store) NewCommitTemp(repositoryID int64) (*os.File, error) {
 	directory := store.reportDir(repositoryID)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -100,6 +104,23 @@ func (store *Store) LoadPullCache(repositoryID int64) (PullCache, error) {
 
 func (store *Store) SavePullCache(repositoryID int64, cache PullCache) error {
 	return store.writeJSON(store.pullPath(repositoryID), cache)
+}
+
+func (store *Store) LoadActionsCache(repositoryID int64) (ActionsCache, error) {
+	var cache ActionsCache
+	file, err := os.Open(store.actionsPath(repositoryID))
+	if err != nil {
+		return cache, err
+	}
+	defer file.Close()
+	if err := json.NewDecoder(file).Decode(&cache); err != nil {
+		return ActionsCache{}, fmt.Errorf("decode GitHub Actions cache: %w", err)
+	}
+	return cache, nil
+}
+
+func (store *Store) SaveActionsCache(repositoryID int64, cache ActionsCache) error {
+	return store.writeJSON(store.actionsPath(repositoryID), cache)
 }
 
 func (store *Store) LoadAnalysisCache(repositoryID int64) (AnalysisCache, error) {
@@ -196,6 +217,13 @@ func (store *Store) LoadReports(snapshot *Snapshot) (map[int64]RepositoryReport,
 				pullStats := BuildPullStats(cache.PullRequests)
 				report.Pulls = &pullStats
 			}
+		}
+		if cache, loadErr := store.LoadActionsCache(repository.ID); loadErr == nil && cache.Version == 1 {
+			report.Actions = &cache
+		} else if loadErr == nil {
+			warnings = append(warnings, fmt.Sprintf("%s: GitHub Actions cache version requires refresh", repository.FullName))
+		} else if !errors.Is(loadErr, os.ErrNotExist) {
+			warnings = append(warnings, fmt.Sprintf("%s: cached GitHub Actions evidence could not be loaded", repository.FullName))
 		}
 		reports[repository.ID] = report
 	}

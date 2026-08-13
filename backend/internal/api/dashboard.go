@@ -15,21 +15,21 @@ import (
 	"github.com/jefking/gait/backend/internal/dashboard"
 )
 
-func overviewHandler(service InsightsService) http.HandlerFunc {
+func deliveryHandler(service InsightsService) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
-		query, err := parseInsightQuery(request)
+		query, err := parseScopeQuery(request)
 		if err != nil {
 			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		result, err := service.InsightOverview(query)
+		result, err := service.InsightDelivery(query)
 		writeInsightResponse(response, result, err)
 	}
 }
 
 func networkHandler(service InsightsService) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
-		query, err := parseInsightQuery(request)
+		query, err := parseScopeQuery(request)
 		if err != nil {
 			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -39,36 +39,42 @@ func networkHandler(service InsightsService) http.HandlerFunc {
 	}
 }
 
-func rampsHandler(service InsightsService) http.HandlerFunc {
-	return func(response http.ResponseWriter, request *http.Request) {
-		query, err := parseInsightQuery(request)
-		if err != nil {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		result, err := service.InsightRamps(query)
-		writeInsightResponse(response, result, err)
-	}
-}
-
-func rankingsHandler(service InsightsService) http.HandlerFunc {
-	return func(response http.ResponseWriter, request *http.Request) {
-		query, err := parseInsightQuery(request)
-		if err != nil {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		query.Cohort, query.Metric = request.URL.Query().Get("cohort"), request.URL.Query().Get("metric")
-		result, err := service.InsightRankings(query)
-		writeInsightResponse(response, result, err)
-	}
-}
-
 func identitiesHandler(service InsightsService) http.HandlerFunc {
-	return func(response http.ResponseWriter, _ *http.Request) {
+	return func(response http.ResponseWriter, request *http.Request) {
+		query, err := parseScopeQuery(request)
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		response.Header().Set("Cache-Control", "no-store")
-		writeJSONValue(response, http.StatusOK, service.Identities())
+		writeJSONValue(response, http.StatusOK, service.ScopedIdentities(query))
 	}
+}
+
+func parseScopeQuery(request *http.Request) (dashboard.InsightQuery, error) {
+	query := dashboard.InsightQuery{}
+	var err error
+	query.ExcludeDead, err = optionalBool(request.URL.Query().Get("exclude_dead"))
+	if err != nil {
+		return query, errors.New("exclude_dead must be true or false")
+	}
+	query.OwnerID, err = optionalPositiveInt64(request.URL.Query().Get("organization_id"))
+	if err != nil {
+		return query, errors.New("organization_id must be a positive integer")
+	}
+	query.RepositoryID, err = optionalPositiveInt64(request.URL.Query().Get("repository_id"))
+	if err != nil {
+		return query, errors.New("repository_id must be a positive integer")
+	}
+	query.From, err = optionalDate(request.URL.Query().Get("from"))
+	if err != nil {
+		return query, errors.New("from must use YYYY-MM-DD")
+	}
+	query.To, err = optionalDate(request.URL.Query().Get("to"))
+	if err != nil {
+		return query, errors.New("to must use YYYY-MM-DD")
+	}
+	return query, nil
 }
 
 func updateIdentityHandler(service InsightsService) http.HandlerFunc {
@@ -100,55 +106,6 @@ func updateIdentityHandler(service InsightsService) http.HandlerFunc {
 	}
 }
 
-func parseInsightQuery(request *http.Request) (dashboard.InsightQuery, error) {
-	query := dashboard.InsightQuery{ActorKind: dashboard.ActorKind(request.URL.Query().Get("actor_kind"))}
-	var err error
-	query.ExcludeDead, err = optionalBool(request.URL.Query().Get("exclude_dead"))
-	if err != nil {
-		return query, errors.New("exclude_dead must be true or false")
-	}
-	query.OwnerID, err = optionalPositiveInt64(request.URL.Query().Get("owner_id"))
-	if err != nil {
-		return query, errors.New("owner_id must be a positive integer")
-	}
-	query.RepositoryID, err = optionalPositiveInt64(request.URL.Query().Get("repository_id"))
-	if err != nil {
-		return query, errors.New("repository_id must be a positive integer")
-	}
-	query.From, err = optionalDate(request.URL.Query().Get("from"))
-	if err != nil {
-		return query, errors.New("from must use YYYY-MM-DD")
-	}
-	query.To, err = optionalDate(request.URL.Query().Get("to"))
-	if err != nil {
-		return query, errors.New("to must use YYYY-MM-DD")
-	}
-	query.SessionHours, err = optionalInteger(request.URL.Query().Get("session_hours"))
-	if err != nil {
-		return query, errors.New("session_hours must be an integer")
-	}
-	query.AdoptionDays, err = optionalInteger(request.URL.Query().Get("adoption_days"))
-	if err != nil {
-		return query, errors.New("adoption_days must be an integer")
-	}
-	query.SurvivalDays, err = optionalInteger(request.URL.Query().Get("survival_days"))
-	if err != nil {
-		return query, errors.New("survival_days must be an integer")
-	}
-	return query, nil
-}
-
-func optionalInteger(value string) (int, error) {
-	if value == "" {
-		return 0, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, err
-	}
-	return parsed, nil
-}
-
 func writeInsightResponse(response http.ResponseWriter, value any, err error) {
 	if err != nil {
 		writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -164,54 +121,6 @@ func dashboardHandler(service DashboardService) http.HandlerFunc {
 	return func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		writeJSONValue(response, http.StatusOK, service.Dashboard())
-	}
-}
-
-func activityHandler(service DashboardService) http.HandlerFunc {
-	return func(response http.ResponseWriter, request *http.Request) {
-		query := dashboard.ActivityQuery{
-			Group:  dashboard.ActivityGroup(request.URL.Query().Get("group_by")),
-			Metric: dashboard.ActivityMetric(request.URL.Query().Get("metric")),
-		}
-		var err error
-		query.ExcludeDead, err = optionalBool(request.URL.Query().Get("exclude_dead"))
-		if err != nil {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "exclude_dead must be true or false"})
-			return
-		}
-		if query.Group == "" {
-			query.Group = dashboard.ActivityByOwner
-		}
-		if query.Metric == "" {
-			query.Metric = dashboard.ActivityCommits
-		}
-		query.OwnerID, err = optionalPositiveInt64(request.URL.Query().Get("owner_id"))
-		if err != nil {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "owner_id must be a positive integer"})
-			return
-		}
-		query.RepositoryID, err = optionalPositiveInt64(request.URL.Query().Get("repository_id"))
-		if err != nil {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "repository_id must be a positive integer"})
-			return
-		}
-		query.From, err = optionalDate(request.URL.Query().Get("from"))
-		if err != nil {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "from must use YYYY-MM-DD"})
-			return
-		}
-		query.To, err = optionalDate(request.URL.Query().Get("to"))
-		if err != nil {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "to must use YYYY-MM-DD"})
-			return
-		}
-		activity, err := service.Activity(query)
-		if err != nil {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		response.Header().Set("Cache-Control", "no-store")
-		writeJSONValue(response, http.StatusOK, activity)
 	}
 }
 

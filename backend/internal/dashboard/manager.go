@@ -46,6 +46,7 @@ type Manager struct {
 	identityOverrides map[string]IdentityOverride
 
 	eventMu     sync.Mutex
+	actionsMu   sync.Mutex
 	subscribers map[chan DashboardEvent]struct{}
 	revision    uint64
 }
@@ -81,6 +82,11 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		return nil, err
 	}
 	reports, warnings := store.LoadReports(snapshot)
+	for id, report := range reports {
+		if !isOrganizationRepository(report.Repository) {
+			delete(reports, id)
+		}
+	}
 	identityOverrides, identityErr := store.LoadIdentityOverrides()
 	if identityErr != nil {
 		return nil, identityErr
@@ -90,7 +96,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		repoStates := make(map[int64]string, len(snapshot.Repositories))
 		for _, summary := range snapshot.Repositories {
 			report, exists := reports[summary.ID]
-			if !exists {
+			if !exists || !isOrganizationRepository(report.Repository) {
 				continue
 			}
 			repositories = append(repositories, report.Repository)
@@ -255,6 +261,13 @@ func (manager *Manager) runSync(ctx context.Context, syncID, token string) {
 		manager.failSync(syncID, err, token)
 		return
 	}
+	organizationRepositories := repositories[:0]
+	for _, repository := range repositories {
+		if isOrganizationRepository(repository) {
+			organizationRepositories = append(organizationRepositories, repository)
+		}
+	}
+	repositories = organizationRepositories
 	sort.Slice(repositories, func(left, right int) bool {
 		return strings.ToLower(repositories[left].FullName) < strings.ToLower(repositories[right].FullName)
 	})
@@ -324,6 +337,8 @@ func (manager *Manager) runSync(ctx context.Context, syncID, token string) {
 					return
 				}
 				report, warnings = manager.processPullRequests(ctx, token, github, repository, report, warnings)
+				manager.markWorkflow(syncID, repository, "delivery_evidence", "Loading GitHub Actions evidence for "+repository.FullName)
+				report, warnings = manager.processDeliveryEvidence(ctx, token, github, repository, report, warnings)
 				manager.markWorkflow(syncID, repository, "publishing", "Publishing statistics for "+repository.FullName)
 				select {
 				case results <- repositoryResult{repository: repository, report: report, warnings: warnings, final: true}:
@@ -455,6 +470,60 @@ func (manager *Manager) processPullRequests(ctx context.Context, token string, g
 		report.SyncMessage = ""
 	}
 	return report, warnings
+}
+
+func (manager *Manager) processDeliveryEvidence(ctx context.Context, token string, github GitHubService, repository Repository, report RepositoryReport, warnings []string) (RepositoryReport, []string) {
+	actionsService, supported := github.(GitHubActionsService)
+	if !supported {
+		return report, warnings
+	}
+	previous, loadErr := manager.store.LoadActionsCache(repository.ID)
+	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+		warnings = append(warnings, repository.FullName+": prior GitHub Actions cache could not be read")
+		previous = ActionsCache{}
+	}
+	earliest := time.Time{}
+	if report.Pulls != nil {
+		for _, pull := range report.Pulls.PullRequests {
+			if earliest.IsZero() || pull.CreatedAt.Before(earliest) {
+				earliest = pull.CreatedAt
+			}
+		}
+	}
+	manager.actionsMu.Lock()
+	actions, actionsErr := actionsService.WorkflowRuns(ctx, repository, previous, earliest)
+	manager.actionsMu.Unlock()
+	if actionsErr == nil {
+		if err := manager.store.SaveActionsCache(repository.ID, actions); err != nil {
+			warnings = append(warnings, repository.FullName+": GitHub Actions cache could not be persisted")
+			report.Actions = &previous
+		} else {
+			report.Actions = &actions
+		}
+	} else if IsPullPermissionError(actionsErr) {
+		previous.Version = 1
+		previous.Checkpoint = time.Now().UTC()
+		previous.PermissionDenied = true
+		report.Actions = &previous
+		if err := manager.store.SaveActionsCache(repository.ID, previous); err != nil {
+			warnings = append(warnings, repository.FullName+": GitHub Actions permission state could not be persisted")
+		}
+		warnings = append(warnings, repository.FullName+": PAT cannot read GitHub Actions; delivery metrics remain available without build evidence")
+	} else {
+		warnings = append(warnings, repository.FullName+": GitHub Actions update failed — "+sanitizeError(actionsErr, token))
+		if len(previous.Runs) > 0 || !previous.Checkpoint.IsZero() {
+			report.Actions = &previous
+		}
+	}
+	if len(warnings) > 0 {
+		report.SyncStatus = "warning"
+		report.SyncMessage = strings.TrimPrefix(warnings[0], repository.FullName+": ")
+	}
+	return report, warnings
+}
+
+func isOrganizationRepository(repository Repository) bool {
+	return strings.EqualFold(strings.TrimSpace(repository.Owner.Type), "Organization")
 }
 
 func (manager *Manager) publish(snapshot *Snapshot, reports map[int64]RepositoryReport, repositoryID int64) {

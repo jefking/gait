@@ -12,17 +12,14 @@ import (
 
 type DashboardService interface {
 	Dashboard() dashboard.DashboardResponse
-	Activity(dashboard.ActivityQuery) (dashboard.ActivityResponse, error)
 	Start(string) (dashboard.SyncStatus, error)
 	Subscribe(context.Context) <-chan dashboard.DashboardEvent
 }
 
 type InsightsService interface {
-	InsightOverview(dashboard.InsightQuery) (dashboard.OverviewResponse, error)
+	InsightDelivery(dashboard.InsightQuery) (dashboard.DeliveryResponse, error)
 	InsightNetwork(dashboard.InsightQuery) (dashboard.NetworkResponse, error)
-	InsightRamps(dashboard.InsightQuery) (dashboard.RampResponse, error)
-	InsightRankings(dashboard.InsightQuery) (dashboard.RankingResponse, error)
-	Identities() dashboard.IdentityResponse
+	ScopedIdentities(dashboard.InsightQuery) dashboard.IdentityResponse
 	UpdateIdentity(string, dashboard.IdentityOverride) (dashboard.IdentityResponse, error)
 }
 
@@ -39,12 +36,9 @@ func NewRouter(staticDir string, services ...DashboardService) http.Handler {
 	if len(services) > 0 && services[0] != nil {
 		service := services[0]
 		router.Get("/api/dashboard", dashboardHandler(service))
-		router.Get("/api/activity", activityHandler(service))
 		if insights, ok := service.(InsightsService); ok {
-			router.Get("/api/insights/overview", overviewHandler(insights))
+			router.Get("/api/insights/delivery", deliveryHandler(insights))
 			router.Get("/api/insights/network", networkHandler(insights))
-			router.Get("/api/insights/ramps", rampsHandler(insights))
-			router.Get("/api/insights/rankings", rankingsHandler(insights))
 			router.Get("/api/identities", identitiesHandler(insights))
 			router.Patch("/api/identities/{key}", updateIdentityHandler(insights))
 		}

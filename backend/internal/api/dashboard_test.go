@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/jefking/gait/backend/internal/dashboard"
 )
@@ -17,23 +16,16 @@ type fakeDashboardService struct {
 	response         dashboard.DashboardResponse
 	started          string
 	startErr         error
-	query            dashboard.ActivityQuery
 	events           chan dashboard.DashboardEvent
 	insightQuery     dashboard.InsightQuery
 	identityKey      string
 	identityOverride dashboard.IdentityOverride
-	activityErr      error
 	insightErr       error
 	identityErr      error
 }
 
 func (service *fakeDashboardService) Dashboard() dashboard.DashboardResponse {
 	return service.response
-}
-
-func (service *fakeDashboardService) Activity(query dashboard.ActivityQuery) (dashboard.ActivityResponse, error) {
-	service.query = query
-	return dashboard.ActivityResponse{Group: query.Group, Metric: query.Metric, Series: []dashboard.ActivitySeries{}}, service.activityErr
 }
 
 func (service *fakeDashboardService) Start(token string) (dashboard.SyncStatus, error) {
@@ -52,6 +44,10 @@ func (service *fakeDashboardService) InsightOverview(query dashboard.InsightQuer
 	service.insightQuery = query
 	return dashboard.OverviewResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, service.insightErr
 }
+func (service *fakeDashboardService) InsightDelivery(query dashboard.InsightQuery) (dashboard.DeliveryResponse, error) {
+	service.insightQuery = query
+	return dashboard.DeliveryResponse{Meta: dashboard.DeliveryMeta{Coverage: dashboard.DeliveryCoverage{}}}, service.insightErr
+}
 func (service *fakeDashboardService) InsightNetwork(query dashboard.InsightQuery) (dashboard.NetworkResponse, error) {
 	service.insightQuery = query
 	return dashboard.NetworkResponse{Meta: dashboard.InsightMeta{Coverage: dashboard.InsightCoverage{}}}, service.insightErr
@@ -66,6 +62,10 @@ func (service *fakeDashboardService) InsightRankings(query dashboard.InsightQuer
 }
 func (service *fakeDashboardService) Identities() dashboard.IdentityResponse {
 	return dashboard.IdentityResponse{Identities: []dashboard.IdentitySummary{}}
+}
+func (service *fakeDashboardService) ScopedIdentities(query dashboard.InsightQuery) dashboard.IdentityResponse {
+	service.insightQuery = query
+	return service.Identities()
 }
 func (service *fakeDashboardService) UpdateIdentity(key string, override dashboard.IdentityOverride) (dashboard.IdentityResponse, error) {
 	service.identityKey = key
@@ -118,41 +118,16 @@ func TestStartSyncAPIRejectsConcurrentJob(t *testing.T) {
 	}
 }
 
-func TestActivityAPIParsesFilters(t *testing.T) {
+func TestDeliveryAPIParsesGlobalScope(t *testing.T) {
 	service := &fakeDashboardService{}
-	request := httptest.NewRequest(http.MethodGet, "/api/activity?group_by=contributor&metric=pull_requests&owner_id=7&repository_id=9&exclude_dead=true&from=2024-01-02&to=2024-03-04", nil)
-	response := httptest.NewRecorder()
-	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected OK, got %d: %s", response.Code, response.Body.String())
-	}
-	if service.query.Group != dashboard.ActivityByContributor || service.query.Metric != dashboard.ActivityPullRequests ||
-		service.query.OwnerID != 7 || service.query.RepositoryID != 9 || !service.query.ExcludeDead || service.query.From == nil || service.query.To == nil ||
-		service.query.From.Format(time.DateOnly) != "2024-01-02" || service.query.To.Format(time.DateOnly) != "2024-03-04" {
-		t.Fatalf("unexpected activity query: %+v", service.query)
-	}
-}
-
-func TestActivityAPIRejectsInvalidDate(t *testing.T) {
-	service := &fakeDashboardService{}
-	request := httptest.NewRequest(http.MethodGet, "/api/activity?from=01-02-2024", nil)
-	response := httptest.NewRecorder()
-	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("expected bad request, got %d: %s", response.Code, response.Body.String())
-	}
-}
-
-func TestInsightAPIParsesSharedFiltersAndRankingSelection(t *testing.T) {
-	service := &fakeDashboardService{}
-	request := httptest.NewRequest(http.MethodGet, "/api/insights/rankings?owner_id=7&repository_id=9&actor_kind=agent&exclude_dead=true&from=2025-01-01&to=2025-02-01&session_hours=48&adoption_days=45&survival_days=60&cohort=human_agent&metric=handoffs", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/insights/delivery?organization_id=7&repository_id=9&exclude_dead=true&from=2025-01-01&to=2025-02-01", nil)
 	response := httptest.NewRecorder()
 	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected OK, got %d: %s", response.Code, response.Body.String())
 	}
 	query := service.insightQuery
-	if query.OwnerID != 7 || query.RepositoryID != 9 || query.ActorKind != dashboard.ActorAgent || !query.ExcludeDead || query.SessionHours != 48 || query.AdoptionDays != 45 || query.SurvivalDays != 60 || query.Cohort != "human_agent" || query.Metric != "handoffs" {
+	if query.OwnerID != 7 || query.RepositoryID != 9 || !query.ExcludeDead || query.From == nil || query.To == nil {
 		t.Fatalf("unexpected query: %+v", query)
 	}
 }
@@ -222,33 +197,8 @@ func TestDashboardEventsStreamsInvalidations(t *testing.T) {
 	}
 }
 
-func TestActivityAPIRejectsInvalidFiltersAndServiceErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		url  string
-		err  error
-		want string
-	}{
-		{"invalid boolean", "/api/activity?exclude_dead=sometimes", nil, "exclude_dead must be true or false"},
-		{"invalid owner", "/api/activity?owner_id=0", nil, "owner_id must be a positive integer"},
-		{"invalid repository", "/api/activity?repository_id=-1", nil, "repository_id must be a positive integer"},
-		{"invalid end date", "/api/activity?to=tomorrow", nil, "to must use YYYY-MM-DD"},
-		{"service validation", "/api/activity", errors.New("unsupported group"), "unsupported group"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			service := &fakeDashboardService{activityErr: test.err}
-			response := httptest.NewRecorder()
-			NewRouter(t.TempDir(), service).ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.url, nil))
-			if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(test.want)) {
-				t.Fatalf("expected bad request containing %q, got %d: %s", test.want, response.Code, response.Body.String())
-			}
-		})
-	}
-}
-
 func TestInsightAPIRoutesAndRejectsInvalidQueries(t *testing.T) {
-	for _, route := range []string{"overview", "network", "ramps"} {
+	for _, route := range []string{"delivery", "network"} {
 		t.Run(route+" success", func(t *testing.T) {
 			response := httptest.NewRecorder()
 			NewRouter(t.TempDir(), &fakeDashboardService{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/insights/"+route, nil))
@@ -259,18 +209,15 @@ func TestInsightAPIRoutesAndRejectsInvalidQueries(t *testing.T) {
 	}
 	tests := []struct{ name, query, want string }{
 		{"boolean", "exclude_dead=nope", "exclude_dead must be true or false"},
-		{"owner", "owner_id=x", "owner_id must be a positive integer"},
+		{"organization", "organization_id=x", "organization_id must be a positive integer"},
 		{"repository", "repository_id=0", "repository_id must be a positive integer"},
 		{"from", "from=yesterday", "from must use YYYY-MM-DD"},
 		{"to", "to=2025-13-01", "to must use YYYY-MM-DD"},
-		{"session", "session_hours=soon", "session_hours must be an integer"},
-		{"adoption", "adoption_days=many", "adoption_days must be an integer"},
-		{"survival", "survival_days=forever", "survival_days must be an integer"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodGet, "/api/insights/overview?"+test.query, nil)
+			request := httptest.NewRequest(http.MethodGet, "/api/insights/delivery?"+test.query, nil)
 			NewRouter(t.TempDir(), &fakeDashboardService{}).ServeHTTP(response, request)
 			if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(test.want)) {
 				t.Fatalf("expected %q, got %d: %s", test.want, response.Code, response.Body.String())
@@ -282,6 +229,18 @@ func TestInsightAPIRoutesAndRejectsInvalidQueries(t *testing.T) {
 	NewRouter(t.TempDir(), service).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/insights/network", nil))
 	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte("range unavailable")) {
 		t.Fatalf("service error not returned: %d %s", response.Code, response.Body.String())
+	}
+	for _, obsolete := range []string{"overview", "ramps", "rankings"} {
+		response := httptest.NewRecorder()
+		NewRouter(t.TempDir(), &fakeDashboardService{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/insights/"+obsolete, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("obsolete %s route remains registered: %d", obsolete, response.Code)
+		}
+	}
+	response = httptest.NewRecorder()
+	NewRouter(t.TempDir(), &fakeDashboardService{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/activity?group_by=contributor", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("contributor activity route remains registered: %d", response.Code)
 	}
 }
 

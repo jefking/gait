@@ -257,14 +257,28 @@ type Repository struct {
 }
 
 type PullRequest struct {
-	Number    int64               `json:"number"`
-	State     string              `json:"state"`
-	MergedAt  *time.Time          `json:"merged_at,omitempty"`
-	ClosedAt  *time.Time          `json:"closed_at,omitempty"`
-	CreatedAt time.Time           `json:"created_at"`
-	UpdatedAt time.Time           `json:"updated_at"`
-	Author    Person              `json:"author"`
-	Reviews   []PullRequestReview `json:"reviews,omitempty"`
+	Number                 int64               `json:"number"`
+	State                  string              `json:"state"`
+	MergedAt               *time.Time          `json:"merged_at,omitempty"`
+	ClosedAt               *time.Time          `json:"closed_at,omitempty"`
+	CreatedAt              time.Time           `json:"created_at"`
+	UpdatedAt              time.Time           `json:"updated_at"`
+	Author                 Person              `json:"author"`
+	Reviews                []PullRequestReview `json:"reviews,omitempty"`
+	Additions              int                 `json:"additions,omitempty"`
+	Deletions              int                 `json:"deletions,omitempty"`
+	ChangedFiles           int                 `json:"changed_files,omitempty"`
+	Commits                int                 `json:"commits,omitempty"`
+	MergeCommitSHA         string              `json:"merge_commit_sha,omitempty"`
+	CommitEvidence         []PullRequestCommit `json:"commit_evidence,omitempty"`
+	DetailComplete         bool                `json:"detail_complete,omitempty"`
+	CommitEvidenceComplete bool                `json:"commit_evidence_complete,omitempty"`
+}
+
+type PullRequestCommit struct {
+	SHA     string `json:"sha"`
+	Message string `json:"message"`
+	Author  Person `json:"author"`
 }
 
 type PullRequestReview struct {
@@ -285,6 +299,39 @@ type PullCache struct {
 	Version      int           `json:"version,omitempty"`
 	Checkpoint   time.Time     `json:"checkpoint"`
 	PullRequests []PullRequest `json:"pull_requests"`
+}
+
+type WorkflowRun struct {
+	ID          int64      `json:"id"`
+	Attempt     int        `json:"attempt"`
+	WorkflowID  int64      `json:"workflow_id"`
+	Name        string     `json:"name"`
+	Event       string     `json:"event"`
+	HeadSHA     string     `json:"head_sha"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	PullNumbers []int64    `json:"pull_numbers,omitempty"`
+}
+
+type ActionsCache struct {
+	Version          int                `json:"version"`
+	Checkpoint       time.Time          `json:"checkpoint"`
+	CoverageFrom     *time.Time         `json:"coverage_from,omitempty"`
+	CoverageTo       *time.Time         `json:"coverage_to,omitempty"`
+	PermissionDenied bool               `json:"permission_denied,omitempty"`
+	Truncated        bool               `json:"truncated,omitempty"`
+	Partitions       []ActionsPartition `json:"partitions,omitempty"`
+	Runs             []WorkflowRun      `json:"runs"`
+}
+
+type ActionsPartition struct {
+	From        time.Time `json:"from"`
+	To          time.Time `json:"to"`
+	ETag        string    `json:"etag,omitempty"`
+	ValidatedAt time.Time `json:"validated_at"`
 }
 
 type ContributorMetrics struct {
@@ -315,7 +362,7 @@ type CommitStats struct {
 
 // CommitEvent retains the event-level evidence needed by relationship and
 // longitudinal analysis. CommitStats still carries its legacy aggregates so
-// cached dashboards and the /api/activity endpoint remain compatible.
+// existing commit caches remain readable.
 type CommitEvent struct {
 	Hash              string               `json:"hash"`
 	CommittedAt       time.Time            `json:"committed_at"`
@@ -350,6 +397,7 @@ type RepositoryReport struct {
 	Repository  Repository
 	Commits     CommitStats
 	Pulls       *PullStats
+	Actions     *ActionsCache
 	SyncStatus  string
 	SyncMessage string
 }

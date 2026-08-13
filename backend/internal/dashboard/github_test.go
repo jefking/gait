@@ -110,6 +110,10 @@ func TestGitHubClientMergesPullRequestsUntilCheckpoint(t *testing.T) {
 			})
 		case "/repos/org/repo/pulls/1/reviews", "/repos/org/repo/pulls/2/reviews":
 			_ = json.NewEncoder(response).Encode([]map[string]any{{"id": 10, "state": "APPROVED", "submitted_at": "2025-01-04T00:00:00Z", "user": map[string]any{"login": "reviewer", "type": "User"}}})
+		case "/repos/org/repo/pulls/1", "/repos/org/repo/pulls/2":
+			_ = json.NewEncoder(response).Encode(map[string]any{"additions": 8, "deletions": 3, "changed_files": 2, "commits": 1, "merge_commit_sha": "merge-sha"})
+		case "/repos/org/repo/pulls/1/commits", "/repos/org/repo/pulls/2/commits":
+			_ = json.NewEncoder(response).Encode([]map[string]any{{"sha": "commit-sha", "commit": map[string]any{"message": "ship"}, "author": map[string]any{"login": "new", "type": "User"}}})
 		default:
 			http.NotFound(response, request)
 		}
@@ -126,8 +130,82 @@ func TestGitHubClientMergesPullRequestsUntilCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list pull requests: %v", err)
 	}
-	if cache.Version != 2 || len(cache.PullRequests) != 2 || cache.PullRequests[0].State != "closed" || cache.PullRequests[1].Author.Login != "new" || len(cache.PullRequests[1].Reviews) != 1 {
+	if cache.Version != 3 || len(cache.PullRequests) != 2 || cache.PullRequests[0].State != "closed" || cache.PullRequests[1].Author.Login != "new" || len(cache.PullRequests[1].Reviews) != 1 || cache.PullRequests[1].Additions != 8 || !cache.PullRequests[1].CommitEvidenceComplete {
 		t.Fatalf("unexpected merged pull request cache: %+v", cache.PullRequests)
+	}
+}
+
+func TestGitHubClientActionsRevalidatesPartitionsAndRetainsRerunAttempts(t *testing.T) {
+	now := time.Now().UTC()
+	earliest := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	var conditionalRequests, attemptRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/repos/org/repo/actions/runs":
+			if request.Header.Get("If-None-Match") == `"partition-v1"` {
+				conditionalRequests.Add(1)
+				response.WriteHeader(http.StatusNotModified)
+				return
+			}
+			response.Header().Set("ETag", `"partition-v1"`)
+			_ = json.NewEncoder(response).Encode(map[string]any{
+				"total_count": 1,
+				"workflow_runs": []map[string]any{{
+					"id": 55, "run_attempt": 2, "workflow_id": 8, "name": "build", "event": "pull_request", "head_sha": "sha", "status": "completed", "conclusion": "success",
+					"created_at": now.Format(time.RFC3339), "updated_at": now.Format(time.RFC3339), "pull_requests": []map[string]any{{"number": 7}},
+				}},
+			})
+		case "/repos/org/repo/actions/runs/55/attempts/1":
+			attemptRequests.Add(1)
+			_ = json.NewEncoder(response).Encode(map[string]any{
+				"id": 55, "run_attempt": 1, "workflow_id": 8, "name": "build", "event": "pull_request", "head_sha": "sha", "status": "completed", "conclusion": "failure",
+				"created_at": now.Add(-time.Minute).Format(time.RFC3339), "updated_at": now.Add(-30 * time.Second).Format(time.RFC3339), "pull_requests": []map[string]any{{"number": 7}},
+			})
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	service, err := NewGitHubClient("token", server.URL, server.Client(), RateLimitCallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions := service.(GitHubActionsService)
+	cache, err := actions.WorkflowRuns(context.Background(), Repository{Name: "repo", Owner: OwnerIdentity{Login: "org"}}, ActionsCache{}, earliest)
+	if err != nil {
+		t.Fatalf("first Actions sync: %v", err)
+	}
+	if len(cache.Runs) != 2 || len(cache.Partitions) != 1 || cache.Partitions[0].ETag != `"partition-v1"` || attemptRequests.Load() != 1 {
+		t.Fatalf("rerun attempts or partition ETag missing: %+v", cache)
+	}
+	cache, err = actions.WorkflowRuns(context.Background(), Repository{Name: "repo", Owner: OwnerIdentity{Login: "org"}}, cache, earliest)
+	if err != nil {
+		t.Fatalf("conditional Actions sync: %v", err)
+	}
+	if len(cache.Runs) != 2 || conditionalRequests.Load() != 1 || attemptRequests.Load() != 1 {
+		t.Fatalf("conditional revalidation lost cached attempts: %+v", cache)
+	}
+}
+
+func TestGitHubClientCapsPullCommitEvidenceAt250(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		items := make([]map[string]any, 100)
+		for index := range items {
+			items[index] = map[string]any{"sha": fmt.Sprintf("%s-%d", request.URL.Query().Get("page"), index), "commit": map[string]any{"message": "ship"}, "author": map[string]any{"login": "human", "type": "User"}}
+		}
+		_ = json.NewEncoder(response).Encode(items)
+	}))
+	defer server.Close()
+	service, err := NewGitHubClient("token", server.URL, server.Client(), RateLimitCallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits, complete, err := service.(*githubClient).pullRequestCommits(context.Background(), Repository{Name: "repo", Owner: OwnerIdentity{Login: "org"}}, 1, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commits) != 250 || complete {
+		t.Fatalf("commit evidence len=%d complete=%v, want capped incomplete evidence", len(commits), complete)
 	}
 }
 

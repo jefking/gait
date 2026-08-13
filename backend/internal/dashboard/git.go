@@ -183,7 +183,12 @@ func (runner *ExecRepositoryRunner) enrichCommitEvents(ctx context.Context, gitB
 		}
 	}
 	for index := range events {
-		events[index].Participants = append([]ContributorMetrics{events[index].Author}, commitCoauthors(events[index].Message)...)
+		// Current git-changes-by-day releases provide structured co-author
+		// identities in the CSV. Older reports do not, so retain the full-message
+		// trailer parser strictly as a backwards-compatible fallback.
+		if len(events[index].Participants) == 0 {
+			events[index].Participants = append([]ContributorMetrics{events[index].Author}, commitCoauthors(events[index].Message)...)
+		}
 		events[index].ExplicitRevert = isExplicitRevert(events[index].Message)
 	}
 	runner.measureRetainedLines(ctx, gitBinary, repositoryPath, events, 30, 500)

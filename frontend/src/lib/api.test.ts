@@ -1,24 +1,28 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getActivity, startSync, subscribeToDashboardEvents } from './api'
+import { getIdentities, getInsightDelivery, getInsightNetwork, startSync, subscribeToDashboardEvents } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
 
 describe('API client', () => {
-  it('serializes activity filters', async () => {
+  it('serializes one global scope for delivery, network, and identities', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ group_by: 'contributor', metric: 'pull_requests', series: [] }), { status: 200 }),
+      new Response(JSON.stringify({}), { status: 200 }),
     )
     vi.stubGlobal('fetch', fetchMock)
-    await getActivity({
-      groupBy: 'contributor',
-      metric: 'pull_requests',
-      ownerId: 7,
+    const scope = {
+      organizationId: 7,
       repositoryId: 9,
       excludeDead: true,
       from: '2024-01-02',
       to: '2024-03-04',
-    })
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/activity?group_by=contributor&metric=pull_requests&owner_id=7&repository_id=9&exclude_dead=true&from=2024-01-02&to=2024-03-04')
+    }
+    await Promise.all([getInsightDelivery(scope), getInsightNetwork(scope), getIdentities(scope)])
+    const query = 'organization_id=7&repository_id=9&exclude_dead=true&from=2024-01-02&to=2024-03-04'
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `/api/insights/delivery?${query}`,
+      `/api/insights/network?${query}`,
+      `/api/identities?${query}`,
+    ])
   })
 
   it('sends a PAT in the one sync request body', async () => {

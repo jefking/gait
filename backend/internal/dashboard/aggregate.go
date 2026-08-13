@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -14,6 +15,23 @@ import (
 )
 
 var commitCSVHeader = []string{
+	"datetime",
+	"date",
+	"commit_hash",
+	"author_email",
+	"github_author_handle",
+	"github_author_display_name",
+	"text",
+	"files_changed",
+	"lines_added",
+	"lines_deleted",
+	"lines_changed",
+	"co_author_emails",
+	"github_co_author_handles",
+	"github_co_author_display_names",
+}
+
+var authorEmailCommitCSVHeader = []string{
 	"datetime",
 	"date",
 	"commit_hash",
@@ -50,7 +68,8 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 	if err != nil {
 		return stats, fmt.Errorf("read commit CSV header: %w", err)
 	}
-	hasAuthorEmail := slices.Equal(header, commitCSVHeader)
+	hasStructuredCoauthors := slices.Equal(header, commitCSVHeader)
+	hasAuthorEmail := hasStructuredCoauthors || slices.Equal(header, authorEmailCommitCSVHeader)
 	if !hasAuthorEmail && !slices.Equal(header, legacyCommitCSVHeader) {
 		return stats, fmt.Errorf("unsupported commit CSV header %q", strings.Join(header, ","))
 	}
@@ -58,7 +77,7 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 	if hasAuthorEmail {
 		columnOffset = 1
 	}
-	expectedColumns := len(legacyCommitCSVHeader) + columnOffset
+	expectedColumns := len(header)
 
 	for {
 		record, readErr := records.Read()
@@ -94,25 +113,13 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 			authorEmail = record[3]
 		}
 		actor := commitContributor(authorEmail, record[3+columnOffset], record[4+columnOffset])
-		contributor := stats.Contributors[actor.Key]
-		if contributor.Key == "" {
-			contributor = actor
-		}
-		contributor.Commits++
-		contributor.FilesChanged += filesChanged
-		contributor.LinesAdded += linesAdded
-		contributor.LinesDeleted += linesDeleted
-		if committedAt.After(contributor.LastActivityAt) {
-			contributor.LastActivityAt = committedAt
-		}
-		stats.Contributors[actor.Key] = contributor
 		eventAuthor := actor
 		eventAuthor.Commits = 1
 		eventAuthor.FilesChanged = filesChanged
 		eventAuthor.LinesAdded = linesAdded
 		eventAuthor.LinesDeleted = linesDeleted
 		eventAuthor.LastActivityAt = committedAt
-		stats.Events = append(stats.Events, CommitEvent{
+		event := CommitEvent{
 			Hash:         record[2],
 			CommittedAt:  committedAt.UTC(),
 			Author:       eventAuthor,
@@ -120,13 +127,44 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 			FilesChanged: filesChanged,
 			LinesAdded:   linesAdded,
 			LinesDeleted: linesDeleted,
-		})
+		}
+		if hasStructuredCoauthors {
+			coauthors, coauthorErr := parseStructuredCoauthors(record[11], record[12], record[13], eventAuthor)
+			if coauthorErr != nil {
+				return stats, fmt.Errorf("parse commit %s co-authors: %w", event.Hash, coauthorErr)
+			}
+			event.Participants = append([]ContributorMetrics{eventAuthor}, coauthors...)
+		}
+		stats.Events = append(stats.Events, event)
 
 		day := committedAt.UTC().Format(time.DateOnly)
 		if stats.Daily[day] == nil {
 			stats.Daily[day] = make(map[string]int)
 		}
-		stats.Daily[day][actor.Key]++
+		participants := event.Participants
+		if len(participants) == 0 {
+			participants = []ContributorMetrics{eventAuthor}
+		}
+		for _, participant := range participants {
+			contributor := stats.Contributors[participant.Key]
+			if contributor.Key == "" {
+				contributor = participant
+				contributor.Commits = 0
+				contributor.FilesChanged = 0
+				contributor.LinesAdded = 0
+				contributor.LinesDeleted = 0
+				contributor.LastActivityAt = time.Time{}
+			}
+			contributor.Commits++
+			contributor.FilesChanged += filesChanged
+			contributor.LinesAdded += linesAdded
+			contributor.LinesDeleted += linesDeleted
+			if committedAt.After(contributor.LastActivityAt) {
+				contributor.LastActivityAt = committedAt
+			}
+			stats.Contributors[participant.Key] = contributor
+			stats.Daily[day][participant.Key]++
+		}
 		stats.Commits++
 		stats.FilesChanged += filesChanged
 		stats.LinesAdded += linesAdded
@@ -142,6 +180,47 @@ func ParseCommitCSV(reader io.Reader) (CommitStats, error) {
 	return stats, nil
 }
 
+func parseStructuredCoauthors(emailsRaw, handlesRaw, namesRaw string, author ContributorMetrics) ([]ContributorMetrics, error) {
+	emails, err := parseCSVStringArray("co_author_emails", emailsRaw)
+	if err != nil {
+		return nil, err
+	}
+	handles, err := parseCSVStringArray("github_co_author_handles", handlesRaw)
+	if err != nil {
+		return nil, err
+	}
+	names, err := parseCSVStringArray("github_co_author_display_names", namesRaw)
+	if err != nil {
+		return nil, err
+	}
+	if len(emails) != len(handles) || len(emails) != len(names) {
+		return nil, fmt.Errorf("parallel co-author arrays have lengths %d, %d, and %d", len(emails), len(handles), len(names))
+	}
+
+	result := make([]ContributorMetrics, 0, len(emails))
+	seen := map[string]struct{}{author.Key: {}}
+	for index := range emails {
+		coauthor := commitContributor(emails[index], handles[index], names[index])
+		if _, exists := seen[coauthor.Key]; exists {
+			continue
+		}
+		seen[coauthor.Key] = struct{}{}
+		result = append(result, coauthor)
+	}
+	return result, nil
+}
+
+func parseCSVStringArray(name, value string) ([]string, error) {
+	var parsed []string
+	if err := json.Unmarshal([]byte(value), &parsed); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if parsed == nil {
+		return []string{}, nil
+	}
+	return parsed, nil
+}
+
 func parseCSVInteger(name, value string) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 0 {
@@ -154,6 +233,10 @@ func commitContributor(authorEmail, handle, displayName string) ContributorMetri
 	authorEmail = strings.ToLower(strings.TrimSpace(authorEmail))
 	handle = strings.TrimSpace(handle)
 	displayName = strings.TrimSpace(displayName)
+	identityType := ""
+	if knownAgentIdentity(handle) || knownAgentIdentity(displayName) || knownAgentIdentity(authorEmail) {
+		identityType = "AgentSignature"
+	}
 	if handle != "" {
 		login := strings.ToLower(handle)
 		if displayName == "" {
@@ -164,18 +247,19 @@ func commitContributor(authorEmail, handle, displayName string) ContributorMetri
 			Login:     handle,
 			Name:      displayName,
 			AvatarURL: "https://github.com/" + url.PathEscape(handle) + ".png?size=80",
+			Type:      identityType,
 		}
 	}
 	if authorEmail != "" {
 		if displayName == "" {
 			displayName = authorEmail
 		}
-		return ContributorMetrics{Key: "email:" + authorEmail, Name: displayName}
+		return ContributorMetrics{Key: "email:" + authorEmail, Name: displayName, Type: identityType}
 	}
 	if displayName == "" {
 		displayName = "Unknown contributor"
 	}
-	return ContributorMetrics{Key: gitIdentityKey(displayName), Name: displayName}
+	return ContributorMetrics{Key: gitIdentityKey(displayName), Name: displayName, Type: identityType}
 }
 
 func gitIdentityKey(displayName string) string {

@@ -67,6 +67,22 @@ func TestKnownAgentNamesRequireTrailerEvidence(t *testing.T) {
 	}
 }
 
+func TestCommitCoauthorsOnlyUsesTerminalTrailerBlock(t *testing.T) {
+	for _, message := range []string{
+		"Co-authored-by: Claude <noreply@anthropic.com>\nshown above as an example",
+		"created with\nCo-authored-by: Claude <noreply@anthropic.com>",
+		"description\n\n  Co-authored-by: Claude <noreply@anthropic.com>",
+	} {
+		if coauthors := commitCoauthors(message); len(coauthors) != 0 {
+			t.Errorf("prose produced co-author evidence for %q: %+v", message, coauthors)
+		}
+	}
+	message := "description\n\nReviewed-by: Human <human@example.com>\nCo-authored-by: Claude <noreply@anthropic.com>"
+	if coauthors := commitCoauthors(message); len(coauthors) != 1 || coauthors[0].Name != "Claude" {
+		t.Fatalf("terminal trailer block was not parsed: %+v", coauthors)
+	}
+}
+
 func TestUnknownIdentitiesAreExcludedWithoutBlockingKnownInsights(t *testing.T) {
 	at := time.Date(2025, time.January, 1, 9, 0, 0, 0, time.UTC)
 	human := ContributorMetrics{Key: "github:alice", Login: "alice", Name: "Alice"}

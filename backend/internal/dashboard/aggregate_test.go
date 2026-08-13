@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"bytes"
+	"encoding/csv"
 	"strings"
 	"testing"
 	"time"
@@ -8,7 +10,7 @@ import (
 
 func TestParseCommitCSVAndContributorIdentity(t *testing.T) {
 	csvData := strings.Join([]string{
-		strings.Join(commitCSVHeader, ","),
+		strings.Join(authorEmailCommitCSVHeader, ","),
 		"2024-01-02T03:04:05Z,2024-01-02,abc,1208574+octocat@users.noreply.github.com,octocat,The Octocat,first,2,10,3,13",
 		"2024-02-03T04:05:06Z,2024-02-03,def,local@example.com,,Local Developer,second,1,4,2,6",
 		"2024-03-04T05:06:07Z,2024-03-04,ghi,LOCAL@example.com,,Local Dev,third,1,2,1,3",
@@ -34,6 +36,57 @@ func TestParseCommitCSVAndContributorIdentity(t *testing.T) {
 	}
 	if stats.FirstAt.Format(time.DateOnly) != "2024-01-02" || stats.LastAt.Format(time.DateOnly) != "2024-03-04" {
 		t.Fatalf("unexpected commit activity bounds: %s to %s", stats.FirstAt, stats.LastAt)
+	}
+}
+
+func TestParseCommitCSVUsesStructuredCoauthors(t *testing.T) {
+	var csvData bytes.Buffer
+	writer := csv.NewWriter(&csvData)
+	_ = writer.Write(commitCSVHeader)
+	_ = writer.Write([]string{
+		"2026-08-12T23:00:00Z", "2026-08-12", "abc", "human@example.com", "", "Human", "pair work",
+		"2", "10", "3", "13",
+		`["noreply@anthropic.com","260473928+moltenbot000@users.noreply.github.com","human@example.com"]`,
+		`["","moltenbot000",""]`,
+		`["Claude Code","Molten Bot 000","Human"]`,
+	})
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := ParseCommitCSV(&csvData)
+	if err != nil {
+		t.Fatalf("parse structured co-authors: %v", err)
+	}
+	participants := stats.Events[0].Participants
+	if len(participants) != 3 {
+		t.Fatalf("participants = %+v, want author plus two distinct co-authors", participants)
+	}
+	if participants[0].Key != "email:human@example.com" || participants[1].Key != "email:noreply@anthropic.com" || participants[1].Type != "AgentSignature" {
+		t.Fatalf("unexpected ordered participants: %+v", participants)
+	}
+	if participants[2].Key != "github:moltenbot000" || participants[2].Login != "moltenbot000" || participants[2].Type != "AgentSignature" {
+		t.Fatalf("GitHub noreply identity was not preserved: %+v", participants[2])
+	}
+	if stats.Contributors[participants[1].Key].Commits != 1 || stats.Daily["2026-08-12"][participants[2].Key] != 1 {
+		t.Fatalf("co-authors were not included in contributor/day evidence: contributors=%+v daily=%+v", stats.Contributors, stats.Daily)
+	}
+}
+
+func TestParseCommitCSVRejectsMisalignedStructuredCoauthors(t *testing.T) {
+	var csvData bytes.Buffer
+	writer := csv.NewWriter(&csvData)
+	_ = writer.Write(commitCSVHeader)
+	_ = writer.Write([]string{
+		"2026-08-12T23:00:00Z", "2026-08-12", "abc", "human@example.com", "", "Human", "pair work",
+		"2", "10", "3", "13", `["one@example.com"]`, `[]`, `["One"]`,
+	})
+	writer.Flush()
+
+	_, err := ParseCommitCSV(&csvData)
+	if err == nil || !strings.Contains(err.Error(), "parallel co-author arrays") {
+		t.Fatalf("error = %v, want mismatched-array validation", err)
 	}
 }
 

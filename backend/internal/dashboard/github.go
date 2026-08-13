@@ -23,6 +23,12 @@ type GitHubService interface {
 	PullRequests(context.Context, Repository, PullCache) (PullCache, error)
 }
 
+// GitHubActionsService is optional so test doubles and installations without
+// Actions access can continue to provide repository and pull-request data.
+type GitHubActionsService interface {
+	WorkflowRuns(context.Context, Repository, ActionsCache, time.Time) (ActionsCache, error)
+}
+
 type HTTPError struct {
 	StatusCode int
 	Message    string
@@ -122,6 +128,9 @@ func (client *githubClient) Repositories(ctx context.Context) ([]Repository, err
 			return nil, err
 		}
 		for _, item := range response {
+			if !strings.EqualFold(item.Owner.Type, "Organization") {
+				continue
+			}
 			defaultBranch := item.DefaultBranch
 			if defaultBranch == "" {
 				defaultBranch = "main"
@@ -207,12 +216,26 @@ func (client *githubClient) PullRequests(ctx context.Context, repository Reposit
 				},
 			}
 			if previousPull, exists := byNumber[item.Number]; exists {
-				pull.Reviews = previousPull.Reviews
+				pull = previousPull
+				pull.Number, pull.State, pull.MergedAt, pull.ClosedAt = item.Number, item.State, item.MergedAt, item.ClosedAt
+				pull.CreatedAt, pull.UpdatedAt = item.CreatedAt, item.UpdatedAt
+				pull.Author = Person{Login: item.User.Login, Name: item.User.Login, AvatarURL: item.User.AvatarURL, Type: item.User.Type}
+			}
+			if detail, detailErr := client.pullRequestDetail(ctx, repository, item.Number); detailErr == nil {
+				pull.Additions, pull.Deletions, pull.ChangedFiles, pull.Commits = detail.Additions, detail.Deletions, detail.ChangedFiles, detail.Commits
+				pull.MergeCommitSHA, pull.DetailComplete = detail.MergeCommitSHA, true
+			} else if !IsPullPermissionError(detailErr) {
+				return previous, detailErr
 			}
 			if reviews, reviewErr := client.pullRequestReviews(ctx, repository, item.Number); reviewErr == nil {
 				pull.Reviews = reviews
 			} else if !IsPullPermissionError(reviewErr) {
 				return previous, reviewErr
+			}
+			if commits, complete, commitErr := client.pullRequestCommits(ctx, repository, item.Number, pull.Commits); commitErr == nil {
+				pull.CommitEvidence, pull.CommitEvidenceComplete = commits, complete
+			} else if !IsPullPermissionError(commitErr) {
+				return previous, commitErr
 			}
 			byNumber[item.Number] = pull
 		}
@@ -221,7 +244,7 @@ func (client *githubClient) PullRequests(ctx context.Context, repository Reposit
 		}
 	}
 
-	cache := PullCache{Version: 2, Checkpoint: startedAt, PullRequests: make([]PullRequest, 0, len(byNumber))}
+	cache := PullCache{Version: 3, Checkpoint: startedAt, PullRequests: make([]PullRequest, 0, len(byNumber))}
 	for _, pull := range byNumber {
 		cache.PullRequests = append(cache.PullRequests, pull)
 	}
@@ -229,6 +252,61 @@ func (client *githubClient) PullRequests(ctx context.Context, repository Reposit
 		return cache.PullRequests[left].Number < cache.PullRequests[right].Number
 	})
 	return cache, nil
+}
+
+type pullRequestDetail struct {
+	Additions      int    `json:"additions"`
+	Deletions      int    `json:"deletions"`
+	ChangedFiles   int    `json:"changed_files"`
+	Commits        int    `json:"commits"`
+	MergeCommitSHA string `json:"merge_commit_sha"`
+}
+
+func (client *githubClient) pullRequestDetail(ctx context.Context, repository Repository, number int64) (pullRequestDetail, error) {
+	var detail pullRequestDetail
+	endpoint := "/repos/" + url.PathEscape(repository.Owner.Login) + "/" + url.PathEscape(repository.Name) + "/pulls/" + strconv.FormatInt(number, 10)
+	return detail, client.get(ctx, endpoint, nil, &detail)
+}
+
+func (client *githubClient) pullRequestCommits(ctx context.Context, repository Repository, number int64, expected int) ([]PullRequestCommit, bool, error) {
+	commits := make([]PullRequestCommit, 0)
+	endpoint := "/repos/" + url.PathEscape(repository.Owner.Login) + "/" + url.PathEscape(repository.Name) + "/pulls/" + strconv.FormatInt(number, 10) + "/commits"
+	for page := 1; page <= 3; page++ {
+		var response []struct {
+			SHA    string `json:"sha"`
+			Author *struct {
+				Login     string `json:"login"`
+				AvatarURL string `json:"avatar_url"`
+				Type      string `json:"type"`
+			} `json:"author"`
+			Commit struct {
+				Message string `json:"message"`
+				Author  struct {
+					Name string `json:"name"`
+				} `json:"author"`
+			} `json:"commit"`
+		}
+		if err := client.get(ctx, endpoint, url.Values{"per_page": {"100"}, "page": {strconv.Itoa(page)}}, &response); err != nil {
+			return nil, false, err
+		}
+		for _, item := range response {
+			if len(commits) == 250 {
+				return commits, expected > 0 && expected <= len(commits), nil
+			}
+			author := Person{Name: item.Commit.Author.Name}
+			if item.Author != nil {
+				author.Login, author.AvatarURL, author.Type = item.Author.Login, item.Author.AvatarURL, item.Author.Type
+				if author.Name == "" {
+					author.Name = item.Author.Login
+				}
+			}
+			commits = append(commits, PullRequestCommit{SHA: item.SHA, Message: item.Commit.Message, Author: author})
+		}
+		if len(response) < 100 {
+			return commits, expected == 0 || expected <= len(commits), nil
+		}
+	}
+	return commits, expected > 0 && expected <= len(commits), nil
 }
 
 func (client *githubClient) pullRequestReviews(ctx context.Context, repository Repository, number int64) ([]PullRequestReview, error) {
@@ -262,25 +340,225 @@ func (client *githubClient) pullRequestReviews(ctx context.Context, repository R
 	return reviews, nil
 }
 
+func (client *githubClient) WorkflowRuns(ctx context.Context, repository Repository, previous ActionsCache, earliest time.Time) (ActionsCache, error) {
+	checkpoint := time.Now().UTC()
+	if earliest.IsZero() {
+		earliest = checkpoint.AddDate(0, -6, 0)
+	}
+	earliest = time.Date(earliest.UTC().Year(), earliest.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+	runsByKey := make(map[string]WorkflowRun)
+	previousPartitions := make(map[string]ActionsPartition)
+	for _, partition := range previous.Partitions {
+		previousPartitions[partition.From.Format(time.DateOnly)+".."+partition.To.Format(time.DateOnly)] = partition
+	}
+	partitions := make([]ActionsPartition, 0)
+	truncated := false
+	for start := earliest; !start.After(checkpoint); start = start.AddDate(0, 1, 0) {
+		end := start.AddDate(0, 1, 0).Add(-time.Second)
+		if end.After(checkpoint) {
+			end = checkpoint
+		}
+		partitionKey := start.Format(time.DateOnly) + ".." + end.Format(time.DateOnly)
+		prior := previousPartitions[partitionKey]
+		runs, incomplete, etag, notModified, err := client.workflowRunsWindow(ctx, repository, start, end, prior.ETag)
+		if err != nil {
+			return ActionsCache{}, err
+		}
+		if notModified {
+			etag = prior.ETag
+			for _, run := range previous.Runs {
+				if !run.CreatedAt.Before(start) && !run.CreatedAt.After(end) {
+					runs = append(runs, run)
+				}
+			}
+		}
+		partitions = append(partitions, ActionsPartition{From: start, To: end, ETag: etag, ValidatedAt: checkpoint})
+		truncated = truncated || incomplete
+		for _, run := range runs {
+			runsByKey[strconv.FormatInt(run.ID, 10)+":"+strconv.Itoa(run.Attempt)] = run
+		}
+	}
+	latestRuns := make([]WorkflowRun, 0, len(runsByKey))
+	for _, run := range runsByKey {
+		latestRuns = append(latestRuns, run)
+	}
+	for _, run := range latestRuns {
+		for attempt := 1; attempt < run.Attempt; attempt++ {
+			key := strconv.FormatInt(run.ID, 10) + ":" + strconv.Itoa(attempt)
+			if _, exists := runsByKey[key]; exists {
+				continue
+			}
+			priorAttempt, err := client.workflowRunAttempt(ctx, repository, run.ID, attempt)
+			if err != nil {
+				return ActionsCache{}, err
+			}
+			runsByKey[key] = priorAttempt
+		}
+	}
+	runs := make([]WorkflowRun, 0, len(runsByKey))
+	for _, run := range runsByKey {
+		runs = append(runs, run)
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
+			if runs[i].ID == runs[j].ID {
+				return runs[i].Attempt < runs[j].Attempt
+			}
+			return runs[i].ID < runs[j].ID
+		}
+		return runs[i].CreatedAt.Before(runs[j].CreatedAt)
+	})
+	coverageFrom, coverageTo := earliest, checkpoint
+	return ActionsCache{Version: 1, Checkpoint: checkpoint, CoverageFrom: &coverageFrom, CoverageTo: &coverageTo, Truncated: truncated, Partitions: partitions, Runs: runs}, nil
+}
+
+func (client *githubClient) workflowRunsWindow(ctx context.Context, repository Repository, start, end time.Time, etag string) ([]WorkflowRun, bool, string, bool, error) {
+	type runResponse struct {
+		TotalCount int `json:"total_count"`
+		Runs       []struct {
+			ID         int64     `json:"id"`
+			Attempt    int       `json:"run_attempt"`
+			WorkflowID int64     `json:"workflow_id"`
+			Name       string    `json:"name"`
+			Event      string    `json:"event"`
+			HeadSHA    string    `json:"head_sha"`
+			Status     string    `json:"status"`
+			Conclusion string    `json:"conclusion"`
+			CreatedAt  time.Time `json:"created_at"`
+			UpdatedAt  time.Time `json:"updated_at"`
+			Pulls      []struct {
+				Number int64 `json:"number"`
+			} `json:"pull_requests"`
+		} `json:"workflow_runs"`
+	}
+	endpoint := "/repos/" + url.PathEscape(repository.Owner.Login) + "/" + url.PathEscape(repository.Name) + "/actions/runs"
+	query := url.Values{
+		"event":    {"pull_request"},
+		"created":  {start.Format(time.DateOnly) + ".." + end.Format(time.DateOnly)},
+		"per_page": {"100"},
+		"page":     {"1"},
+	}
+	var first runResponse
+	responseETag, notModified, err := client.getConditional(ctx, endpoint, query, etag, &first)
+	if err != nil || notModified {
+		return nil, false, responseETag, notModified, err
+	}
+	if first.TotalCount > 900 && end.Sub(start) > 24*time.Hour {
+		midpoint := start.Add(end.Sub(start) / 2)
+		left, leftIncomplete, _, _, err := client.workflowRunsWindow(ctx, repository, start, midpoint, "")
+		if err != nil {
+			return nil, false, responseETag, false, err
+		}
+		right, rightIncomplete, _, _, err := client.workflowRunsWindow(ctx, repository, midpoint.Add(time.Second), end, "")
+		return append(left, right...), leftIncomplete || rightIncomplete, responseETag, false, err
+	}
+	convert := func(items []struct {
+		ID         int64     `json:"id"`
+		Attempt    int       `json:"run_attempt"`
+		WorkflowID int64     `json:"workflow_id"`
+		Name       string    `json:"name"`
+		Event      string    `json:"event"`
+		HeadSHA    string    `json:"head_sha"`
+		Status     string    `json:"status"`
+		Conclusion string    `json:"conclusion"`
+		CreatedAt  time.Time `json:"created_at"`
+		UpdatedAt  time.Time `json:"updated_at"`
+		Pulls      []struct {
+			Number int64 `json:"number"`
+		} `json:"pull_requests"`
+	}) []WorkflowRun {
+		converted := make([]WorkflowRun, 0, len(items))
+		for _, item := range items {
+			attempt := item.Attempt
+			if attempt == 0 {
+				attempt = 1
+			}
+			run := WorkflowRun{ID: item.ID, Attempt: attempt, WorkflowID: item.WorkflowID, Name: item.Name, Event: item.Event, HeadSHA: item.HeadSHA, Status: item.Status, Conclusion: item.Conclusion, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
+			if strings.EqualFold(item.Status, "completed") {
+				completed := item.UpdatedAt
+				run.CompletedAt = &completed
+			}
+			for _, pull := range item.Pulls {
+				run.PullNumbers = append(run.PullNumbers, pull.Number)
+			}
+			converted = append(converted, run)
+		}
+		return converted
+	}
+	runs := convert(first.Runs)
+	pages := (first.TotalCount + 99) / 100
+	for page := 2; page <= pages && page <= 10; page++ {
+		query.Set("page", strconv.Itoa(page))
+		var response runResponse
+		if err := client.get(ctx, endpoint, query, &response); err != nil {
+			return nil, false, responseETag, false, err
+		}
+		runs = append(runs, convert(response.Runs)...)
+	}
+	return runs, first.TotalCount > 1000, responseETag, false, nil
+}
+
+func (client *githubClient) workflowRunAttempt(ctx context.Context, repository Repository, runID int64, attempt int) (WorkflowRun, error) {
+	var item struct {
+		ID         int64     `json:"id"`
+		Attempt    int       `json:"run_attempt"`
+		WorkflowID int64     `json:"workflow_id"`
+		Name       string    `json:"name"`
+		Event      string    `json:"event"`
+		HeadSHA    string    `json:"head_sha"`
+		Status     string    `json:"status"`
+		Conclusion string    `json:"conclusion"`
+		CreatedAt  time.Time `json:"created_at"`
+		UpdatedAt  time.Time `json:"updated_at"`
+		Pulls      []struct {
+			Number int64 `json:"number"`
+		} `json:"pull_requests"`
+	}
+	endpoint := "/repos/" + url.PathEscape(repository.Owner.Login) + "/" + url.PathEscape(repository.Name) + "/actions/runs/" + strconv.FormatInt(runID, 10) + "/attempts/" + strconv.Itoa(attempt)
+	if err := client.get(ctx, endpoint, nil, &item); err != nil {
+		return WorkflowRun{}, err
+	}
+	if item.Attempt == 0 {
+		item.Attempt = attempt
+	}
+	run := WorkflowRun{ID: item.ID, Attempt: item.Attempt, WorkflowID: item.WorkflowID, Name: item.Name, Event: item.Event, HeadSHA: item.HeadSHA, Status: item.Status, Conclusion: item.Conclusion, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
+	if strings.EqualFold(item.Status, "completed") {
+		completed := item.UpdatedAt
+		run.CompletedAt = &completed
+	}
+	for _, pull := range item.Pulls {
+		run.PullNumbers = append(run.PullNumbers, pull.Number)
+	}
+	return run, nil
+}
+
 func (client *githubClient) get(ctx context.Context, path string, query url.Values, target any) error {
+	_, _, err := client.getConditional(ctx, path, query, "", target)
+	return err
+}
+
+func (client *githubClient) getConditional(ctx context.Context, path string, query url.Values, etag string, target any) (string, bool, error) {
 	for attempt := 0; attempt < 4; attempt++ {
 		if err := client.limiter.wait(ctx); err != nil {
-			return err
+			return "", false, err
 		}
 		endpoint := client.baseURL.ResolveReference(&url.URL{Path: strings.TrimSuffix(client.baseURL.Path, "/") + path})
 		endpoint.RawQuery = query.Encode()
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 		if err != nil {
-			return fmt.Errorf("create GitHub request: %w", err)
+			return "", false, fmt.Errorf("create GitHub request: %w", err)
 		}
 		request.Header.Set("Accept", "application/vnd.github+json")
 		request.Header.Set("Authorization", "Bearer "+client.token)
 		request.Header.Set("User-Agent", "gait-dashboard")
 		request.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
+		if etag != "" {
+			request.Header.Set("If-None-Match", etag)
+		}
 
 		response, err := client.httpClient.Do(request)
 		if err != nil {
-			return fmt.Errorf("request GitHub: %w", err)
+			return "", false, fmt.Errorf("request GitHub: %w", err)
 		}
 		if resetAt, limited := rateLimitReset(response); limited {
 			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 8<<10))
@@ -288,22 +566,27 @@ func (client *githubClient) get(ctx context.Context, path string, query url.Valu
 			client.limiter.block(resetAt)
 			continue
 		}
+		responseETag := response.Header.Get("ETag")
+		if response.StatusCode == http.StatusNotModified {
+			_ = response.Body.Close()
+			return responseETag, true, nil
+		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			message := githubErrorMessage(response.Body)
 			_ = response.Body.Close()
-			return &HTTPError{StatusCode: response.StatusCode, Message: message}
+			return responseETag, false, &HTTPError{StatusCode: response.StatusCode, Message: message}
 		}
 		decodeErr := json.NewDecoder(io.LimitReader(response.Body, 128<<20)).Decode(target)
 		closeErr := response.Body.Close()
 		if decodeErr != nil {
-			return fmt.Errorf("decode GitHub response: %w", decodeErr)
+			return responseETag, false, fmt.Errorf("decode GitHub response: %w", decodeErr)
 		}
 		if closeErr != nil {
-			return fmt.Errorf("close GitHub response: %w", closeErr)
+			return responseETag, false, fmt.Errorf("close GitHub response: %w", closeErr)
 		}
-		return nil
+		return responseETag, false, nil
 	}
-	return errors.New("GitHub rate limit retry budget exhausted")
+	return "", false, errors.New("GitHub rate limit retry budget exhausted")
 }
 
 func githubErrorMessage(reader io.Reader) string {
