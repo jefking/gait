@@ -36,6 +36,9 @@ describe('App delivery rehaul', () => {
     expect(screen.getAllByText('Team delivery evidence').length).toBeGreaterThan(0)
     expect(screen.getByText('Agent-impact evidence')).toBeInTheDocument()
     expect(screen.getByText('Is quality going up or down?')).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'octo-org/hello-world' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Visit Molten.bot' })).toHaveAttribute('href', 'https://molten.bot')
+    expect(screen.getByRole('link', { name: 'Visit Molten.bot' })).toHaveAttribute('target', '_blank')
     expect(screen.queryByText(/Who leads this period/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'GitHub settings' }))
     expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
@@ -59,6 +62,30 @@ describe('App delivery rehaul', () => {
       expect(scoped.some((url) => url.startsWith('/api/insights/network'))).toBe(true)
       expect(scoped.some((url) => url.startsWith('/api/identities'))).toBe(true)
     })
+  })
+
+  it('limits repository choices to the selected organization', async () => {
+    const dashboard = structuredClone(cachedDashboard)
+    dashboard.snapshot!.owners.push({
+      ...dashboard.snapshot!.owners[0],
+      owner: { ...dashboard.snapshot!.owners[0].owner, id: 2, login: 'second-org' },
+    })
+    dashboard.snapshot!.repositories.push({
+      ...dashboard.snapshot!.repositories[0],
+      id: 20,
+      full_name: 'second-org/hello-world',
+      owner: { ...dashboard.snapshot!.repositories[0].owner, id: 2, login: 'second-org' },
+    })
+    vi.stubGlobal('fetch', mockAPI(dashboard))
+    render(<App />)
+    await screen.findByText('Shipped velocity by work mode')
+    expect(screen.getByRole('option', { name: 'second-org/hello-world' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Organization All organizations' }))
+    fireEvent.click(screen.getByRole('option', { name: 'octo-org' }))
+
+    expect(screen.getByRole('option', { name: 'octo-org/hello-world' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'second-org/hello-world' })).not.toBeInTheDocument()
   })
 
   it('unmounts stale delivery content immediately when scope changes', async () => {
@@ -89,14 +116,30 @@ describe('App delivery rehaul', () => {
     const fetchMock=mockAPI();vi.stubGlobal('fetch',fetchMock);render(<App/>);await screen.findByText('Shipped velocity by work mode')
     const urls=fetchMock.mock.calls.map(([url])=>String(url));expect(urls.some((url)=>/overview|ramps|rankings/.test(url))).toBe(false)
   })
+
+  it('renders sparse organization evidence when legacy collections are null', async () => {
+    const sparseDelivery = {
+      ...emptyDelivery,
+      meta: { ...emptyDelivery.meta, available_from: undefined, available_to: undefined, from: undefined, to: undefined },
+      velocity: null,
+      quality: { direction: 'insufficient', signals: null, points: null },
+      flow: { ...emptyDelivery.flow, points: null },
+      impact: { ...emptyDelivery.impact, quality_deltas: null },
+    } as unknown as DeliveryResponse
+    vi.stubGlobal('fetch', mockAPI(undefined, [], false, sparseDelivery))
+    render(<App />)
+    expect(await screen.findByText('Velocity requires attributed merged PRs and a non-zero opening baseline.')).toBeInTheDocument()
+    expect(screen.getByText('No quality samples are available.')).toBeInTheDocument()
+    expect(screen.queryByText('Impact evidence is unavailable.')).not.toBeInTheDocument()
+  })
 })
 
-function mockAPI(dashboard: DashboardResponse = cachedDashboard, identities: IdentitySummary[] = [], failFiltered=false) {
+function mockAPI(dashboard: DashboardResponse = cachedDashboard, identities: IdentitySummary[] = [], failFiltered=false, delivery: DeliveryResponse = emptyDelivery) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url=String(input)
     if(url==='/api/dashboard')return jsonResponse(dashboard)
     if(failFiltered&&url.includes('exclude_dead=true'))throw new Error('Filtered evidence failed')
-    if(url.startsWith('/api/insights/delivery'))return jsonResponse(emptyDelivery)
+    if(url.startsWith('/api/insights/delivery'))return jsonResponse(delivery)
     if(url.startsWith('/api/insights/network'))return jsonResponse({meta:{available_from:'2024-01-01',available_to:'2025-01-01',from:'2024-01-01',to:'2025-01-01',granularity:'week',session_hours:72,adoption_days:30,survival_days:30,coverage:{total_commits:0,classified_commits:0,unknown_commits:0,classification_rate:0,mature_commits:0,eligible_pull_requests:0,reviewed_pull_requests:0}},nodes:[],edges:[],total_identities:0})
     if(url.startsWith('/api/identities?'))return jsonResponse({identities})
     if(url.startsWith('/api/identities/')&&init?.method==='PATCH')return jsonResponse({identities})

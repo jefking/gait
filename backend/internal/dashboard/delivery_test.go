@@ -1,7 +1,9 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,6 +64,27 @@ func TestDeliveryAttributionAndBaselineIndexInvariants(t *testing.T) {
 	}
 	if response.Summary.Leader == "" {
 		t.Fatal("single leader contract was not populated")
+	}
+}
+
+func TestDeliveryEmptyScopeSerializesCollectionsAsArrays(t *testing.T) {
+	report := deliveryTestReport(1, 10, "Organization", nil)
+	manager := &Manager{reports: map[int64]RepositoryReport{1: report}, identityOverrides: map[string]IdentityOverride{}}
+	response, err := manager.InsightDelivery(InsightQuery{OwnerID: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Velocity == nil || response.Quality.Points == nil || response.Quality.Signals == nil || response.Flow.Points == nil || response.Impact.QualityDeltas == nil {
+		t.Fatalf("empty delivery collections must be non-nil: %+v", response)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"velocity":[]`, `"signals":[]`, `"points":[]`, `"quality_deltas":[]`} {
+		if !strings.Contains(string(encoded), field) {
+			t.Errorf("delivery JSON does not contain %s: %s", field, encoded)
+		}
 	}
 }
 
@@ -181,6 +204,72 @@ func TestScopedIdentitiesHonorOrganizationRepositoryAndDate(t *testing.T) {
 	if len(identities.Identities) != 1 || identities.Identities[0].Login != "inside" {
 		t.Fatalf("identities leaked outside the global scope: %+v", identities)
 	}
+}
+
+func TestOrganizationScopeIsolatesNetworkAndIdentityOverrides(t *testing.T) {
+	at := mustDeliveryDate("2025-02-10")
+	makeReport := func(id, organizationID int64, organization, login string) RepositoryReport {
+		person := ContributorMetrics{Key: "github:" + login, Login: login, Name: login}
+		return RepositoryReport{
+			Repository: Repository{ID: id, Name: "repo", FullName: organization + "/repo", Owner: OwnerIdentity{ID: organizationID, Login: organization, Type: "Organization"}},
+			Commits:    CommitStats{Events: []CommitEvent{{Hash: login, CommittedAt: at, Author: person, Participants: []ContributorMetrics{person}}}},
+		}
+	}
+	reports := map[int64]RepositoryReport{
+		1: makeReport(1, 10, "one", "alice"),
+		2: makeReport(2, 20, "two", "bob"),
+		3: makeReport(3, 10, "one", "carol"),
+	}
+	overrides := map[string]IdentityOverride{
+		"github:alice": {Kind: ActorHuman},
+		"github:bob":   {Kind: ActorHuman},
+		"github:carol": {Kind: ActorHuman},
+		"github:ghost": {Kind: ActorAgent, DisplayName: "Ghost"},
+	}
+	manager := &Manager{reports: reports, identityOverrides: overrides}
+	from, to := at, at
+	query := InsightQuery{OwnerID: 10, From: &from, To: &to}
+	network, err := manager.InsightNetwork(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(network.Nodes) != 2 || network.TotalIdentities != 2 || !networkHasLogin(network, "alice") || !networkHasLogin(network, "carol") {
+		t.Fatalf("network leaked identities outside organization scope: %+v", network.Nodes)
+	}
+	identities := manager.ScopedIdentities(query)
+	if len(identities.Identities) != 2 || !identitiesHaveLogin(identities, "alice") || !identitiesHaveLogin(identities, "carol") {
+		t.Fatalf("identity view leaked overrides outside organization scope: %+v", identities.Identities)
+	}
+	query.RepositoryID = 1
+	repositoryNetwork, err := manager.InsightNetwork(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositoryNetwork.Nodes) != 1 || repositoryNetwork.Nodes[0].Login != "alice" {
+		t.Fatalf("network leaked sibling-repository identities: %+v", repositoryNetwork.Nodes)
+	}
+	repositoryIdentities := manager.ScopedIdentities(query)
+	if len(repositoryIdentities.Identities) != 1 || repositoryIdentities.Identities[0].Login != "alice" {
+		t.Fatalf("identity view leaked sibling-repository identities: %+v", repositoryIdentities.Identities)
+	}
+}
+
+func networkHasLogin(network NetworkResponse, login string) bool {
+	for _, node := range network.Nodes {
+		if node.Login == login {
+			return true
+		}
+	}
+	return false
+}
+
+func identitiesHaveLogin(response IdentityResponse, login string) bool {
+	for _, identity := range response.Identities {
+		if identity.Login == login {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDeliveryQualityDirectionRefusesLowSamples(t *testing.T) {

@@ -579,7 +579,6 @@ func insightMaturityCutoff(query InsightQuery) time.Time {
 
 func buildIdentityCatalog(reports map[int64]RepositoryReport, overrides map[string]IdentityOverride) map[string]*resolvedIdentity {
 	catalog := make(map[string]*resolvedIdentity)
-	usedOverrides := make(map[string]struct{})
 	stableMigrations := stableIdentityMigrations(reports, overrides)
 	add := func(person ContributorMetrics) *resolvedIdentity {
 		if person.Key == "" {
@@ -597,10 +596,7 @@ func buildIdentityCatalog(reports map[int64]RepositoryReport, overrides map[stri
 		legacyKey := legacyPersonIdentityKey(person)
 		if _, exists := overrides[legacyKey]; legacyKey != "" && legacyKey != person.Key && exists {
 			identity.aliases[legacyKey] = struct{}{}
-			usedOverrides[legacyKey] = struct{}{}
 		}
-		usedOverrides[person.Key] = struct{}{}
-		usedOverrides[canonical] = struct{}{}
 		mergeIdentityMetadata(&identity.IdentitySummary, person)
 		applyIdentityOverride(&identity.IdentitySummary, overrides[legacyKey])
 		applyIdentityOverride(&identity.IdentitySummary, overrides[person.Key])
@@ -643,16 +639,6 @@ func buildIdentityCatalog(reports map[int64]RepositoryReport, overrides map[stri
 				}
 			}
 		}
-	}
-	for key, override := range overrides {
-		if _, used := usedOverrides[key]; used {
-			continue
-		}
-		if _, exists := catalog[canonicalIdentityKey(key, overrides)]; exists {
-			continue
-		}
-		person := ContributorMetrics{Key: key, Name: override.DisplayName}
-		add(person)
 	}
 	return catalog
 }
@@ -1048,7 +1034,31 @@ func buildNetwork(reports map[int64]RepositoryReport, overrides map[string]Ident
 
 func buildNetworkWithLimit(reports map[int64]RepositoryReport, overrides map[string]IdentityOverride, query InsightQuery, meta InsightMeta, maximumNodes int) NetworkResponse {
 	meta.Coverage = insightCoverage(reports, overrides, query)
-	catalog := buildIdentityCatalog(reports, overrides)
+	scopedReports := make(map[int64]RepositoryReport)
+	for id, report := range reports {
+		if !insightReportMatches(report, query) {
+			continue
+		}
+		events := make([]CommitEvent, 0, len(report.Commits.Events))
+		for _, event := range report.Commits.Events {
+			if inInsightRange(event.CommittedAt, query) {
+				events = append(events, event)
+			}
+		}
+		report.Commits.Events = events
+		if report.Pulls != nil {
+			pulls := make([]PullRequest, 0, len(report.Pulls.PullRequests))
+			for _, pull := range report.Pulls.PullRequests {
+				if inInsightRange(pull.CreatedAt, query) {
+					pulls = append(pulls, pull)
+				}
+			}
+			stats := BuildPullStats(pulls)
+			report.Pulls = &stats
+		}
+		scopedReports[id] = report
+	}
+	catalog := buildIdentityCatalog(scopedReports, overrides)
 	aliases := identityAliasIndex(catalog)
 	for _, identity := range catalog {
 		identity.Commits, identity.PullRequests, identity.Reviews = 0, 0, 0

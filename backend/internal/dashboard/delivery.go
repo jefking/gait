@@ -299,7 +299,23 @@ func deliveryReportMatches(report RepositoryReport, query InsightQuery) bool {
 }
 
 func buildDelivery(reports map[int64]RepositoryReport, overrides map[string]IdentityOverride, query InsightQuery, meta DeliveryMeta) DeliveryResponse {
-	response := DeliveryResponse{Meta: meta, Quality: DeliveryQuality{Direction: "insufficient"}, Impact: DeliveryImpact{Tier: "insufficient_evidence", Verdict: "insufficient evidence", PreWeeks: 8, PostWeeks: 8}}
+	response := DeliveryResponse{
+		Meta:     meta,
+		Velocity: []DeliveryVelocityPoint{},
+		Quality: DeliveryQuality{
+			Direction: "insufficient",
+			Signals:   []DeliveryQualitySignal{},
+			Points:    []DeliveryQualityPoint{},
+		},
+		Flow: DeliveryFlow{Points: []DeliveryFlowPoint{}},
+		Impact: DeliveryImpact{
+			Tier:          "insufficient_evidence",
+			Verdict:       "insufficient evidence",
+			PreWeeks:      8,
+			PostWeeks:     8,
+			QualityDeltas: []DeliveryImpactQualityDelta{},
+		},
+	}
 	if query.From == nil || query.To == nil {
 		response.Summary = buildDeliverySummary(response)
 		return response
@@ -990,7 +1006,7 @@ func buildDeliverySummary(response DeliveryResponse) DeliverySummary {
 }
 
 func buildDeliveryImpact(repositories []*deliveryRepoData, catalog map[string]*resolvedIdentity, aliases map[string]*resolvedIdentity, overrides map[string]IdentityOverride, query InsightQuery) DeliveryImpact {
-	result := DeliveryImpact{Tier: "insufficient_evidence", Verdict: "insufficient evidence", PreWeeks: 8, PostWeeks: 8}
+	result := DeliveryImpact{Tier: "insufficient_evidence", Verdict: "insufficient evidence", PreWeeks: 8, PostWeeks: 8, QualityDeltas: []DeliveryImpactQualityDelta{}}
 	adopted := 0
 	treated := make([]impactRepositoryEffect, 0)
 	for _, repository := range repositories {
