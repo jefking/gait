@@ -16,14 +16,14 @@ const cachedDashboard: DashboardResponse = {
 }
 
 const emptyDelivery: DeliveryResponse = {
-  meta: { available_from: '2024-01-01', available_to: '2025-01-01', from: '2024-01-01', to: '2025-01-01', granularity: 'week', scope: { exclude_dead: false }, coverage: { organizations: 1, repositories: 1, index_eligible_repositories: 1, merged_pull_requests: 1, attributed_pull_requests: 1, unattributed_pull_requests: 0, detailed_pull_requests: 1, complete_commit_evidence_pull_requests: 1, truncated_commit_evidence_pull_requests: 0, attribution_rate: 1, actions_runs: 0, actions_covered_pull_requests: 0, actions_permission_denied: false, actions_truncated: false, direct_commit_coverage: true, low_confidence_baseline: false } },
+  meta: { available_from: '2024-01-01', available_to: '2025-01-01', from: '2024-01-01', to: '2025-01-01', granularity: 'week', scope: { exclude_dead: false }, coverage: { organizations: 1, repositories: 1, index_eligible_repositories: 1, merged_pull_requests: 1, attributed_pull_requests: 1, unattributed_pull_requests: 0, incomplete_authorship_evidence_pull_requests: 0, unknown_authorship_identity_pull_requests: 0, detailed_pull_requests: 1, complete_commit_evidence_pull_requests: 1, truncated_commit_evidence_pull_requests: 0, attribution_rate: 1, actions_runs: 0, actions_covered_pull_requests: 0, actions_permission_denied: false, actions_truncated: false, direct_commit_coverage: true, low_confidence_baseline: false } },
   summary: { narrative: 'Team velocity is 18% above its opening pace. Quality is stable or inconclusive.', velocity_vs_baseline: .18, agent_associated_share: .42, quality_direction: 'stable/inconclusive', leader: 'Collaborative' },
-  velocity: [{ date: '2024-01-01', complete: true, total_index: 100, human: { index: 50, merged_pull_requests: 1, additions: 8, deletions: 2, changed_lines: 10, commits: 1, direct_commits: 0 }, agent: { index: 20, merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, collaborative: { index: 30, merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 } }],
+  velocity: [{ date: '2024-01-01', complete: true, total_index: 100, human: { index: 50, merged_pull_requests: 1, additions: 8, deletions: 2, changed_lines: 10, commits: 1, direct_commits: 0 }, agent: { index: 20, merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, collaborative: { index: 30, merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, authorship_unknown: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 } }],
   performance: {
-    daily: [{ date: '2024-01-01', leader: 'human_agent', total_index: 100, human: { index: 10, merged_pull_requests: 1, additions: 1, deletions: 0, changed_lines: 1, commits: 1, direct_commits: 0 }, human_human: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 }, human_agent: { index: 50, merged_pull_requests: 2, additions: 5, deletions: 0, changed_lines: 5, commits: 2, direct_commits: 0 }, agent: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 } }],
-    overall: { leader: 'human_agent', total_index: 100, human: { index: 10, merged_pull_requests: 1, additions: 1, deletions: 0, changed_lines: 1, commits: 1, direct_commits: 0 }, human_human: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 }, human_agent: { index: 50, merged_pull_requests: 2, additions: 5, deletions: 0, changed_lines: 5, commits: 2, direct_commits: 0 }, agent: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 } },
+    daily: [{ date: '2024-01-01', leader: 'human_agent', total_index: 100, human: { index: 10, merged_pull_requests: 1, additions: 1, deletions: 0, changed_lines: 1, commits: 1, direct_commits: 0 }, human_human: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 }, human_agent: { index: 50, merged_pull_requests: 2, additions: 5, deletions: 0, changed_lines: 5, commits: 2, direct_commits: 0 }, agent: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 }, authorship_unknown: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 } }],
+    overall: { leader: 'human_agent', total_index: 100, human: { index: 10, merged_pull_requests: 1, additions: 1, deletions: 0, changed_lines: 1, commits: 1, direct_commits: 0 }, human_human: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 }, human_agent: { index: 50, merged_pull_requests: 2, additions: 5, deletions: 0, changed_lines: 5, commits: 2, direct_commits: 0 }, agent: { index: 20, merged_pull_requests: 1, additions: 2, deletions: 0, changed_lines: 2, commits: 1, direct_commits: 0 }, authorship_unknown: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 } },
   },
-  raw: { human: { merged_pull_requests: 1, additions: 8, deletions: 2, changed_lines: 10, commits: 1, direct_commits: 0 }, agent: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, collaborative: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, total: { merged_pull_requests: 1, additions: 8, deletions: 2, changed_lines: 10, commits: 1, direct_commits: 0 } },
+  raw: { human: { merged_pull_requests: 1, additions: 8, deletions: 2, changed_lines: 10, commits: 1, direct_commits: 0 }, agent: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, collaborative: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, authorship_unknown: { merged_pull_requests: 0, additions: 0, deletions: 0, changed_lines: 0, commits: 0, direct_commits: 0 }, total: { merged_pull_requests: 1, additions: 8, deletions: 2, changed_lines: 10, commits: 1, direct_commits: 0 } },
   quality: { direction: 'stable/inconclusive', signals: [], points: [] },
   flow: { summary: { as_of: '2025-01-01', open_pull_requests: 0, merged_pull_request_sample: 1 }, points: [] },
   impact: { tier: 'insufficient_evidence', verdict: 'insufficient evidence', treated_repositories: 0, control_repositories: 0, adoption_coverage: 0, pre_weeks: 8, post_weeks: 8, quality_deltas: [] },
@@ -40,7 +40,9 @@ describe('App delivery rehaul', () => {
     expect(screen.getAllByText('Team delivery evidence').length).toBeGreaterThan(0)
     expect(screen.getByText('Agent-impact evidence')).toBeInTheDocument()
     expect(screen.getByText('Is quality going up or down?')).toBeInTheDocument()
-    expect(screen.getByText('Daily and overall leaders')).toBeInTheDocument()
+    const performanceHeading = screen.getByText('Daily and overall leaders')
+    const primaryMeasureHeading = screen.getByText('Shipped velocity by work mode')
+    expect(performanceHeading.compareDocumentPosition(primaryMeasureHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect((await screen.findAllByText('Human + Human')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Human + Agent').length).toBeGreaterThan(0)
     expect(screen.queryByText('Collaboration network')).not.toBeInTheDocument()
@@ -131,9 +133,40 @@ describe('App delivery rehaul', () => {
     expect(screen.getByText('Mystery Actor')).toBeInTheDocument()
   })
 
+  it('collapses and expands the global scope controls', async () => {
+    vi.stubGlobal('fetch', mockAPI()); render(<App />)
+    const collapse = await screen.findByRole('button', { name: 'Collapse global scope' })
+    expect(collapse).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('radio', { name: 'octo-org' })).toBeVisible()
+
+    fireEvent.click(collapse)
+    expect(screen.getByRole('button', { name: 'Expand global scope' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('radio', { name: 'octo-org' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand global scope' }))
+    expect(screen.getByRole('radio', { name: 'octo-org' })).toBeVisible()
+  })
+
   it('never requests obsolete overview, ramp, or ranking routes', async () => {
     const fetchMock=mockAPI();vi.stubGlobal('fetch',fetchMock);render(<App/>);await screen.findByText('Shipped velocity by work mode')
     const urls=fetchMock.mock.calls.map(([url])=>String(url));expect(urls.some((url)=>/overview|ramps|rankings/.test(url))).toBe(false)
+  })
+
+  it('shows authorship-unknown PRs separately from performance leaders', async () => {
+    const delivery = structuredClone(emptyDelivery)
+    delivery.meta.coverage.merged_pull_requests = 4
+    delivery.meta.coverage.unattributed_pull_requests = 3
+    delivery.meta.coverage.incomplete_authorship_evidence_pull_requests = 2
+    delivery.meta.coverage.unknown_authorship_identity_pull_requests = 1
+    delivery.performance.overall.authorship_unknown.merged_pull_requests = 3
+    delivery.performance.daily[0].authorship_unknown.merged_pull_requests = 3
+    delivery.raw.authorship_unknown.merged_pull_requests = 3
+    delivery.raw.total.merged_pull_requests = 4
+    vi.stubGlobal('fetch', mockAPI(undefined, [], false, delivery))
+    render(<App />)
+    expect(await screen.findByText('3 merged PRs have unknown code authorship')).toBeInTheDocument()
+    expect(screen.getByText(/2 with incomplete commit evidence and 1 with unresolved commit authors/)).toBeInTheDocument()
+    expect(screen.getAllByText('Authorship unknown').length).toBeGreaterThan(0)
   })
 
   it('renders sparse organization evidence when legacy collections are null', async () => {

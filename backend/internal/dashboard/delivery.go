@@ -19,6 +19,8 @@ type DeliveryCoverage struct {
 	MergedPullRequests        int     `json:"merged_pull_requests"`
 	AttributedPullRequests    int     `json:"attributed_pull_requests"`
 	UnattributedPullRequests  int     `json:"unattributed_pull_requests"`
+	IncompleteAuthorship      int     `json:"incomplete_authorship_evidence_pull_requests"`
+	UnknownAuthorship         int     `json:"unknown_authorship_identity_pull_requests"`
 	DetailedPullRequests      int     `json:"detailed_pull_requests"`
 	CompleteCommitEvidence    int     `json:"complete_commit_evidence_pull_requests"`
 	TruncatedCommitEvidence   int     `json:"truncated_commit_evidence_pull_requests"`
@@ -65,21 +67,23 @@ type DeliveryModeMetrics struct {
 }
 
 type DeliveryVelocityPoint struct {
-	Date          string              `json:"date"`
-	Human         DeliveryModeMetrics `json:"human"`
-	Agent         DeliveryModeMetrics `json:"agent"`
-	Collaborative DeliveryModeMetrics `json:"collaborative"`
-	TotalIndex    float64             `json:"total_index"`
-	Complete      bool                `json:"complete"`
+	Date              string              `json:"date"`
+	Human             DeliveryModeMetrics `json:"human"`
+	Agent             DeliveryModeMetrics `json:"agent"`
+	Collaborative     DeliveryModeMetrics `json:"collaborative"`
+	AuthorshipUnknown DeliveryRawMetrics  `json:"authorship_unknown"`
+	TotalIndex        float64             `json:"total_index"`
+	Complete          bool                `json:"complete"`
 }
 
 type DeliveryPerformanceBreakdown struct {
-	Human      DeliveryModeMetrics `json:"human"`
-	HumanHuman DeliveryModeMetrics `json:"human_human"`
-	HumanAgent DeliveryModeMetrics `json:"human_agent"`
-	Agent      DeliveryModeMetrics `json:"agent"`
-	TotalIndex float64             `json:"total_index"`
-	Leader     string              `json:"leader"`
+	Human             DeliveryModeMetrics `json:"human"`
+	HumanHuman        DeliveryModeMetrics `json:"human_human"`
+	HumanAgent        DeliveryModeMetrics `json:"human_agent"`
+	Agent             DeliveryModeMetrics `json:"agent"`
+	AuthorshipUnknown DeliveryRawMetrics  `json:"authorship_unknown"`
+	TotalIndex        float64             `json:"total_index"`
+	Leader            string              `json:"leader"`
 }
 
 type DeliveryPerformancePoint struct {
@@ -93,10 +97,11 @@ type DeliveryPerformance struct {
 }
 
 type DeliveryRawTable struct {
-	Human         DeliveryRawMetrics `json:"human"`
-	Agent         DeliveryRawMetrics `json:"agent"`
-	Collaborative DeliveryRawMetrics `json:"collaborative"`
-	Total         DeliveryRawMetrics `json:"total"`
+	Human             DeliveryRawMetrics `json:"human"`
+	Agent             DeliveryRawMetrics `json:"agent"`
+	Collaborative     DeliveryRawMetrics `json:"collaborative"`
+	AuthorshipUnknown DeliveryRawMetrics `json:"authorship_unknown"`
+	Total             DeliveryRawMetrics `json:"total"`
 }
 
 type DeliveryQualityPoint struct {
@@ -412,6 +417,7 @@ func buildDelivery(reports map[int64]RepositoryReport, overrides map[string]Iden
 			addRawMetrics(&point.Human.DeliveryRawMetrics, *bucket.modes["human"])
 			addRawMetrics(&point.Agent.DeliveryRawMetrics, *bucket.modes["agent"])
 			addRawMetrics(&point.Collaborative.DeliveryRawMetrics, *bucket.modes["collaborative"])
+			addRawMetrics(&point.AuthorshipUnknown, *bucket.modes["authorship_unknown"])
 			mergeQualityAccumulator(&qualityAccumulator, bucket.quality)
 			mergeFlowAccumulator(&flowAccumulator, bucket.flow)
 			if !repository.baseline.valid {
@@ -434,10 +440,12 @@ func buildDelivery(reports map[int64]RepositoryReport, overrides map[string]Iden
 		addRawMetrics(&response.Raw.Human, point.Human.DeliveryRawMetrics)
 		addRawMetrics(&response.Raw.Agent, point.Agent.DeliveryRawMetrics)
 		addRawMetrics(&response.Raw.Collaborative, point.Collaborative.DeliveryRawMetrics)
+		addRawMetrics(&response.Raw.AuthorshipUnknown, point.AuthorshipUnknown)
 	}
 	addRawMetrics(&response.Raw.Total, response.Raw.Human)
 	addRawMetrics(&response.Raw.Total, response.Raw.Agent)
 	addRawMetrics(&response.Raw.Total, response.Raw.Collaborative)
+	addRawMetrics(&response.Raw.Total, response.Raw.AuthorshipUnknown)
 	response.Performance = buildDeliveryPerformance(repositories, response.Meta.Coverage.IndexEligibleRepositories)
 	response.Quality.Direction, response.Quality.Signals = deliveryQualityDirection(response.Quality.Points, response.Velocity)
 	response.Flow.Summary = deliveryFlowAt(repositories, *query.From, *query.To)
@@ -448,7 +456,7 @@ func buildDelivery(reports map[int64]RepositoryReport, overrides map[string]Iden
 
 func newDeliveryBucket() *deliveryBucket {
 	return &deliveryBucket{
-		modes:   map[string]*DeliveryRawMetrics{"human": {}, "agent": {}, "collaborative": {}},
+		modes:   map[string]*DeliveryRawMetrics{"human": {}, "agent": {}, "collaborative": {}, "authorship_unknown": {}},
 		quality: deliveryQualityAccumulator{actionsPulls: make(map[string]bool), actionsFailed: make(map[string]bool)},
 	}
 }
@@ -484,9 +492,12 @@ func populateDeliveryRepository(data *deliveryRepoData, catalog map[string]*reso
 			if pull.MergedAt == nil {
 				continue
 			}
-			identities := knownIdentities(deliveryPullIdentities(pull, structuredCommitParticipants, catalog, aliases, overrides))
-			mode := deliveryIdentityMode(identities)
-			performanceMode := deliveryPerformanceMode(identities)
+			identities := deliveryPullAuthorshipIdentities(pull, structuredCommitParticipants, catalog, aliases, overrides)
+			mode, performanceMode := "unattributed", "authorship_unknown"
+			if pull.CommitEvidenceComplete {
+				mode = deliveryIdentityMode(identities)
+				performanceMode = deliveryPerformanceMode(identities)
+			}
 			if mode == "agent" || mode == "collaborative" {
 				date := dayUTC(*pull.MergedAt)
 				if data.adoption == nil || date.Before(*data.adoption) {
@@ -510,6 +521,11 @@ func populateDeliveryRepository(data *deliveryRepoData, catalog map[string]*reso
 			}
 			if mode == "unattributed" {
 				coverage.UnattributedPullRequests++
+				if !pull.CommitEvidenceComplete {
+					coverage.IncompleteAuthorship++
+				} else {
+					coverage.UnknownAuthorship++
+				}
 			} else {
 				coverage.AttributedPullRequests++
 			}
@@ -517,17 +533,18 @@ func populateDeliveryRepository(data *deliveryRepoData, catalog map[string]*reso
 			if bucket == nil {
 				continue
 			}
-			if mode != "unattributed" {
-				raw := bucket.modes[mode]
-				addPullRawMetrics(raw, pull)
-				dateKey := dayUTC(*pull.MergedAt).Format(time.DateOnly)
-				performance := data.performance[dateKey]
-				if performance == nil {
-					performance = newDeliveryPerformanceModes()
-					data.performance[dateKey] = performance
-				}
-				addPullRawMetrics(performance[performanceMode], pull)
+			bucketMode := mode
+			if bucketMode == "unattributed" {
+				bucketMode = "authorship_unknown"
 			}
+			addPullRawMetrics(bucket.modes[bucketMode], pull)
+			dateKey := dayUTC(*pull.MergedAt).Format(time.DateOnly)
+			performance := data.performance[dateKey]
+			if performance == nil {
+				performance = newDeliveryPerformanceModes()
+				data.performance[dateKey] = performance
+			}
+			addPullRawMetrics(performance[performanceMode], pull)
 			bucket.quality.reviewSample++
 			if pullHasKnownReview(pull, catalog, overrides) {
 				bucket.quality.reviewed++
@@ -561,22 +578,20 @@ func populateDeliveryRepository(data *deliveryRepoData, catalog map[string]*reso
 		if _, belongsToPull := prCommits[event.Hash]; belongsToPull || !directCommitEvidenceComplete {
 			continue
 		}
-		mode := deliveryIdentityMode(knownEventIdentities(event, catalog, aliases, overrides))
-		if mode != "unattributed" {
-			bucket.modes[mode].DirectCommits++
+		mode := deliveryIdentityMode(eventIdentities(event, catalog, aliases, overrides))
+		if mode == "unattributed" {
+			mode = "authorship_unknown"
 		}
+		bucket.modes[mode].DirectCommits++
 	}
 	populateActions(data, query, coverage)
 }
 
-func deliveryPullIdentities(pull PullRequest, structuredCommits map[string][]ContributorMetrics, catalog map[string]*resolvedIdentity, aliases map[string]*resolvedIdentity, overrides map[string]IdentityOverride) []*resolvedIdentity {
-	people := []ContributorMetrics{personMetrics(pull.Author)}
-	for _, review := range pull.Reviews {
-		if review.SubmittedAt == nil || pull.MergedAt != nil && review.SubmittedAt.After(*pull.MergedAt) {
-			continue
-		}
-		people = append(people, personMetrics(review.Author))
-	}
+func deliveryPullAuthorshipIdentities(pull PullRequest, structuredCommits map[string][]ContributorMetrics, catalog map[string]*resolvedIdentity, aliases map[string]*resolvedIdentity, overrides map[string]IdentityOverride) []*resolvedIdentity {
+	// PR authors, reviewers, and the person who performs the merge are workflow
+	// participants, not proof of code authorship. Only the complete commit list,
+	// including recognized co-authors, determines an authorship composition.
+	people := make([]ContributorMetrics, 0, len(pull.CommitEvidence))
 	for _, commit := range pull.CommitEvidence {
 		if participants := structuredCommits[commit.SHA]; len(participants) > 0 {
 			people = append(people, participants...)
@@ -585,11 +600,20 @@ func deliveryPullIdentities(pull PullRequest, structuredCommits map[string][]Con
 			people = append(people, commitCoauthors(commit.Message)...)
 		}
 	}
-	return resolveDeliveryIdentities(people, catalog, aliases, overrides)
+	identities := resolveDeliveryIdentities(people, catalog, aliases, overrides)
+	for _, person := range people {
+		if person.Key == "git:unknown" || person.Key == "github:" || person.Key == "" {
+			return append(identities, &resolvedIdentity{IdentitySummary: IdentitySummary{Key: "authorship:unknown", CanonicalKey: "authorship:unknown", Name: "Unknown author", Kind: ActorUnknown, Evidence: "missing_commit_identity", Confidence: "unknown"}})
+		}
+	}
+	return identities
 }
 
 func deliveryPullMode(pull PullRequest, structuredCommits map[string][]ContributorMetrics, catalog map[string]*resolvedIdentity, aliases map[string]*resolvedIdentity, overrides map[string]IdentityOverride) string {
-	return deliveryIdentityMode(knownIdentities(deliveryPullIdentities(pull, structuredCommits, catalog, aliases, overrides)))
+	if !pull.CommitEvidenceComplete {
+		return "unattributed"
+	}
+	return deliveryIdentityMode(deliveryPullAuthorshipIdentities(pull, structuredCommits, catalog, aliases, overrides))
 }
 
 func pullHasKnownReview(pull PullRequest, catalog map[string]*resolvedIdentity, overrides map[string]IdentityOverride) bool {
@@ -635,6 +659,11 @@ func resolveDeliveryIdentities(people []ContributorMetrics, catalog map[string]*
 }
 
 func deliveryIdentityMode(identities []*resolvedIdentity) string {
+	for _, identity := range identities {
+		if !isKnownIdentity(identity) {
+			return "unattributed"
+		}
+	}
 	switch workBucket(identities) {
 	case "human_only":
 		return "human"
@@ -655,6 +684,8 @@ func deliveryPerformanceMode(identities []*resolvedIdentity) string {
 			humans++
 		case ActorAgent:
 			agents++
+		default:
+			return "authorship_unknown"
 		}
 	}
 	switch {
@@ -667,12 +698,12 @@ func deliveryPerformanceMode(identities []*resolvedIdentity) string {
 	case humans == 0 && agents > 0:
 		return "agent"
 	default:
-		return "unattributed"
+		return "authorship_unknown"
 	}
 }
 
 func newDeliveryPerformanceModes() map[string]*DeliveryRawMetrics {
-	return map[string]*DeliveryRawMetrics{"human": {}, "human_human": {}, "human_agent": {}, "agent": {}}
+	return map[string]*DeliveryRawMetrics{"human": {}, "human_human": {}, "human_agent": {}, "agent": {}, "authorship_unknown": {}}
 }
 
 func addPullRawMetrics(raw *DeliveryRawMetrics, pull PullRequest) {
@@ -809,6 +840,7 @@ func buildDeliveryPerformance(repositories []*deliveryRepoData, eligibleReposito
 			addRawMetrics(&point.HumanHuman.DeliveryRawMetrics, *modes["human_human"])
 			addRawMetrics(&point.HumanAgent.DeliveryRawMetrics, *modes["human_agent"])
 			addRawMetrics(&point.Agent.DeliveryRawMetrics, *modes["agent"])
+			addRawMetrics(&point.AuthorshipUnknown, *modes["authorship_unknown"])
 			if !repository.baseline.valid {
 				continue
 			}
@@ -837,6 +869,7 @@ func addPerformanceBreakdown(target *DeliveryPerformanceBreakdown, source Delive
 	addRawMetrics(&target.HumanHuman.DeliveryRawMetrics, source.HumanHuman.DeliveryRawMetrics)
 	addRawMetrics(&target.HumanAgent.DeliveryRawMetrics, source.HumanAgent.DeliveryRawMetrics)
 	addRawMetrics(&target.Agent.DeliveryRawMetrics, source.Agent.DeliveryRawMetrics)
+	addRawMetrics(&target.AuthorshipUnknown, source.AuthorshipUnknown)
 	target.Human.Index += source.Human.Index
 	target.HumanHuman.Index += source.HumanHuman.Index
 	target.HumanAgent.Index += source.HumanAgent.Index
@@ -1120,7 +1153,7 @@ func buildDeliverySummary(response DeliveryResponse) DeliverySummary {
 		totals["Agent"] += point.Agent.Index
 		totals["Collaborative"] += point.Collaborative.Index
 	}
-	if len(complete) > 0 {
+	if len(complete) > 0 && response.Meta.Coverage.IndexEligibleRepositories > 0 {
 		start := max(0, len(complete)-3)
 		values := make([]float64, 0, len(complete)-start)
 		for _, point := range complete[start:] {

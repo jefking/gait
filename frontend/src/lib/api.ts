@@ -237,6 +237,8 @@ export interface DeliveryCoverage {
   merged_pull_requests: number
   attributed_pull_requests: number
   unattributed_pull_requests: number
+  incomplete_authorship_evidence_pull_requests: number
+  unknown_authorship_identity_pull_requests: number
   detailed_pull_requests: number
   complete_commit_evidence_pull_requests: number
   truncated_commit_evidence_pull_requests: number
@@ -282,6 +284,7 @@ export interface DeliveryVelocityPoint {
   human: DeliveryModeMetrics
   agent: DeliveryModeMetrics
   collaborative: DeliveryModeMetrics
+  authorship_unknown: DeliveryRawMetrics
   total_index: number
   complete: boolean
 }
@@ -293,6 +296,7 @@ export interface DeliveryPerformanceBreakdown {
   human_human: DeliveryModeMetrics
   human_agent: DeliveryModeMetrics
   agent: DeliveryModeMetrics
+  authorship_unknown: DeliveryRawMetrics
   total_index: number
   leader: DeliveryPerformanceMode | 'tie' | 'none'
 }
@@ -373,6 +377,7 @@ export interface DeliveryResponse {
     human: DeliveryRawMetrics
     agent: DeliveryRawMetrics
     collaborative: DeliveryRawMetrics
+    authorship_unknown: DeliveryRawMetrics
     total: DeliveryRawMetrics
   }
   quality: { direction: string; signals: DeliveryQualitySignal[]; points: DeliveryQualityPoint[] }

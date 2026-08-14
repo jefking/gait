@@ -23,11 +23,13 @@ func TestDeliveryAttributionAndBaselineIndexInvariants(t *testing.T) {
 		case 5:
 			submitted := merged.Add(-time.Hour)
 			pull.Reviews = []PullRequestReview{{ID: 1, State: "COMMENTED", SubmittedAt: &submitted, Author: Person{Login: "agent[bot]", Type: "Bot"}}}
+			pull.CommitEvidence[0].Message = "ship\n\nCo-authored-by: agent[bot] <agent[bot]@users.noreply.github.com>"
 		case 6:
 			pull.CommitEvidence = append(pull.CommitEvidence, PullRequestCommit{SHA: "unknown", Author: Person{Name: "Unknown"}})
 		case 7:
 			pull.Author = Person{Name: "Unknown"}
 			pull.CommitEvidence = nil
+			pull.CommitEvidenceComplete = false
 		}
 		pulls = append(pulls, pull)
 	}
@@ -38,11 +40,14 @@ func TestDeliveryAttributionAndBaselineIndexInvariants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delivery: %v", err)
 	}
-	if response.Meta.Coverage.Repositories != 1 || response.Meta.Coverage.MergedPullRequests != 12 || response.Meta.Coverage.AttributedPullRequests != 11 || response.Meta.Coverage.UnattributedPullRequests != 1 {
+	if response.Meta.Coverage.Repositories != 1 || response.Meta.Coverage.MergedPullRequests != 12 || response.Meta.Coverage.AttributedPullRequests != 10 || response.Meta.Coverage.UnattributedPullRequests != 2 || response.Meta.Coverage.IncompleteAuthorship != 1 || response.Meta.Coverage.UnknownAuthorship != 1 {
 		t.Fatalf("unexpected scoped attribution coverage: %+v", response.Meta.Coverage)
 	}
-	if response.Raw.Human.MergedPullRequests != 9 || response.Raw.Agent.MergedPullRequests != 1 || response.Raw.Collaborative.MergedPullRequests != 1 {
+	if response.Raw.Human.MergedPullRequests != 8 || response.Raw.Agent.MergedPullRequests != 1 || response.Raw.Collaborative.MergedPullRequests != 1 || response.Raw.AuthorshipUnknown.MergedPullRequests != 2 || response.Raw.Total.MergedPullRequests != 12 {
 		t.Fatalf("unexpected work-mode attribution: %+v", response.Raw)
+	}
+	if response.Performance.Overall.AuthorshipUnknown.MergedPullRequests != 2 {
+		t.Fatalf("unknown authorship was not exposed in performance: %+v", response.Performance.Overall)
 	}
 	if response.Raw.Total.ChangedLines != response.Raw.Total.Additions+response.Raw.Total.Deletions {
 		t.Fatalf("changed-line arithmetic double counted: %+v", response.Raw.Total)
@@ -111,13 +116,29 @@ func TestDeliveryAttributionPrefersStructuredCommitParticipants(t *testing.T) {
 	}
 }
 
+func TestDeliveryAuthorshipIgnoresPullRequestOpenerAndReviewer(t *testing.T) {
+	merged := mustDeliveryDate("2025-02-10")
+	pull := deliveryTestPull(1, merged, Person{Login: "human", Type: "User"}, 8, 2, 1)
+	pull.CommitEvidence[0].Author = Person{Login: "agent[bot]", Type: "Bot"}
+	submitted := merged.Add(-time.Hour)
+	pull.Reviews = []PullRequestReview{{ID: 1, State: "APPROVED", SubmittedAt: &submitted, Author: Person{Login: "reviewer", Type: "User"}}}
+	manager := &Manager{reports: map[int64]RepositoryReport{1: deliveryTestReport(1, 10, "Organization", []PullRequest{pull})}, identityOverrides: map[string]IdentityOverride{}}
+	response, err := manager.InsightDelivery(InsightQuery{From: &merged, To: &merged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Raw.Agent.MergedPullRequests != 1 || response.Raw.Human.MergedPullRequests != 0 || response.Raw.Collaborative.MergedPullRequests != 0 {
+		t.Fatalf("workflow participants incorrectly changed code authorship: %+v", response.Raw)
+	}
+}
+
 func TestDeliveryPerformanceSeparatesDailyParticipantCompositions(t *testing.T) {
 	from := mustDeliveryDate("2025-01-06")
 	to := mustDeliveryDate("2025-01-10")
 	people := []struct {
-		date   time.Time
-		author Person
-		review *Person
+		date     time.Time
+		author   Person
+		coauthor *Person
 	}{
 		{from, Person{Login: "alice", Type: "User"}, nil},
 		{from.AddDate(0, 0, 1), Person{Login: "alice", Type: "User"}, &Person{Login: "bob", Type: "User"}},
@@ -128,9 +149,9 @@ func TestDeliveryPerformanceSeparatesDailyParticipantCompositions(t *testing.T) 
 	pulls := make([]PullRequest, 0, len(people))
 	for index, participant := range people {
 		pull := deliveryTestPull(int64(index+1), participant.date, participant.author, 8, 2, 1)
-		if participant.review != nil {
-			submitted := participant.date.Add(-time.Hour)
-			pull.Reviews = []PullRequestReview{{ID: int64(index + 1), State: "APPROVED", SubmittedAt: &submitted, Author: *participant.review}}
+		if participant.coauthor != nil {
+			pull.CommitEvidence = append(pull.CommitEvidence, PullRequestCommit{SHA: "coauthor", Author: *participant.coauthor})
+			pull.Commits = len(pull.CommitEvidence)
 		}
 		pulls = append(pulls, pull)
 	}

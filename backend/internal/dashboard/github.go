@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+const pullCacheVersion = 3
+
 const githubAPIVersion = "2026-03-10"
 
 type GitHubService interface {
@@ -165,6 +167,7 @@ func (client *githubClient) Repositories(ctx context.Context) ([]Repository, err
 
 func (client *githubClient) PullRequests(ctx context.Context, repository Repository, previous PullCache) (PullCache, error) {
 	startedAt := time.Now().UTC()
+	incremental := pullCacheEnrichmentComplete(previous)
 	byNumber := make(map[int64]PullRequest, len(previous.PullRequests))
 	for _, pull := range previous.PullRequests {
 		byNumber[pull.Number] = pull
@@ -197,7 +200,7 @@ func (client *githubClient) PullRequests(ctx context.Context, repository Reposit
 			return previous, err
 		}
 		for _, item := range response {
-			if previous.Version >= 2 && !previous.Checkpoint.IsZero() && !item.UpdatedAt.After(previous.Checkpoint) {
+			if incremental && !previous.Checkpoint.IsZero() && !item.UpdatedAt.After(previous.Checkpoint) {
 				stop = true
 				break
 			}
@@ -244,7 +247,7 @@ func (client *githubClient) PullRequests(ctx context.Context, repository Reposit
 		}
 	}
 
-	cache := PullCache{Version: 3, Checkpoint: startedAt, PullRequests: make([]PullRequest, 0, len(byNumber))}
+	cache := PullCache{Version: pullCacheVersion, Checkpoint: startedAt, PullRequests: make([]PullRequest, 0, len(byNumber))}
 	for _, pull := range byNumber {
 		cache.PullRequests = append(cache.PullRequests, pull)
 	}
@@ -252,6 +255,19 @@ func (client *githubClient) PullRequests(ctx context.Context, repository Reposit
 		return cache.PullRequests[left].Number < cache.PullRequests[right].Number
 	})
 	return cache, nil
+}
+
+func pullCacheEnrichmentComplete(cache PullCache) bool {
+	if cache.Version < pullCacheVersion {
+		return false
+	}
+	for _, pull := range cache.PullRequests {
+		commitEvidenceTruncatedAtLimit := pull.Commits > 250 && len(pull.CommitEvidence) == 250
+		if !pull.DetailComplete || !pull.CommitEvidenceComplete && !commitEvidenceTruncatedAtLimit {
+			return false
+		}
+	}
+	return true
 }
 
 type pullRequestDetail struct {

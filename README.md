@@ -11,8 +11,8 @@ The dashboard reports merged-PR velocity for human, agent, and collaborative wor
 keeps raw shipped-work measures auditable, and evaluates throughput beside build,
 review, revert, retention, merge-time, and PR-flow guardrails. Daily and overall
 performance leaders compare solo-human, multi-human, human–agent, and agent-only
-participation—never individuals. Attribution uses exact participant evidence;
-unknown work remains visible as coverage but is excluded from mode indices.
+code authorship—never individuals. Attribution requires complete commit-author and
+recognized co-author evidence; unknown work remains visible but is excluded from mode indices.
 Repository telemetry is presented as observed association rather than causal proof.
 
 ## Stack
@@ -42,8 +42,8 @@ The server:
 4. Enriches commit events with full messages, parents, and touched paths, then
    publishes commit statistics immediately.
 5. Fetches pull requests, reviews, additions, deletions, changed files, commit counts,
-   merge SHAs, and up to 250 commit/co-author records on first use, then enriches only
-   new or updated pull requests.
+   merge SHAs, and up to 250 commit/co-author records on first use or cache-schema
+   upgrade, then enriches only new or updated pull requests.
 6. Fetches PR-triggered GitHub Actions runs in calendar partitions, retaining rerun
    attempts, ETags, permission coverage, and freshness. Dense partitions split before
    GitHub's 1,000-result search cap.
@@ -165,18 +165,20 @@ not synced or returned; existing personal-repository cache files are left untouc
 
 ### Attribution and interpretation
 
-The shipped unit is a merged PR, assigned to its merge date. Known PR authors,
-reviews submitted before merge, commit authors, recognized co-authors, and
-user-maintained overrides determine `human`, `agent`, or `collaborative` mode.
-The performance breakdown further separates one human, multiple humans, mixed
-human–agent participation, and agent-only participation. Each active day's leader
+The shipped unit is a merged PR, assigned to its merge date. A complete PR commit
+list, its commit authors, recognized co-authors, and user-maintained identity overrides
+determine `human`, `agent`, or `collaborative` code authorship. PR openers, reviewers,
+and the person who performs the merge are workflow participants, not authorship
+signals. The performance breakdown further separates one human, multiple humans,
+mixed human–agent authorship, and agent-only authorship. Each active day's leader
 has the largest delivery-index contribution; the overall leader sums those daily
 contributions inside the selected range.
 Structured co-author fields from `git-changes-by-day` are authoritative for refreshed
 commit reports; full-message trailer parsing remains only for older reports. Agent
 attribution uses exact GitHub Bot/App or known-signature evidence and never
-guesses from prose, code style, or code volume. Fully unknown PRs are excluded and
-reported as attribution coverage.
+guesses from prose, code style, or code volume. Incomplete commit lists and PRs with
+unresolved commit authors remain visible as authorship unknown and are excluded from
+mode indices and leadership.
 
 For each repository, the first four complete adaptive periods establish baseline
 means. Each mode contributes `100 × [0.5 × mode PRs / baseline total PRs + 0.5 ×

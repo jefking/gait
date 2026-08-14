@@ -529,8 +529,12 @@ func TestPersonMetricsAndIdentityFilters(t *testing.T) {
 		t.Fatalf("unexpected person metrics: %+v", person)
 	}
 	unknown := personMetrics(Person{Name: "Anonymous"})
-	if unknown.Key != "git:unknown" || unknown.Name != "Anonymous" {
+	if unknown.Key != "git:anonymous" || unknown.Name != "Anonymous" {
 		t.Fatalf("unexpected anonymous metrics: %+v", unknown)
+	}
+	agent := personMetrics(Person{Name: "Claude Code"})
+	if agent.Key != "git:claude code" || agent.Type != "AgentSignature" || classifyIdentity(agent).Kind != ActorAgent {
+		t.Fatalf("known agent signature was not retained without a GitHub login: %+v", agent)
 	}
 
 	human := &resolvedIdentity{IdentitySummary: IdentitySummary{Kind: ActorHuman}}

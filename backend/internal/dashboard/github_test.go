@@ -135,6 +135,60 @@ func TestGitHubClientMergesPullRequestsUntilCheckpoint(t *testing.T) {
 	}
 }
 
+func TestGitHubClientReenrichesEveryPullRequestWhenUpgradingV2Cache(t *testing.T) {
+	checkpoint := time.Date(2025, time.January, 3, 0, 0, 0, 0, time.UTC)
+	var detailRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/repos/org/repo/pulls":
+			_ = json.NewEncoder(response).Encode([]map[string]any{{
+				"number": 1, "state": "closed", "merged_at": "2025-01-02T00:00:00Z", "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-02T00:00:00Z", "user": map[string]any{"login": "human", "type": "User"},
+			}})
+		case "/repos/org/repo/pulls/1":
+			detailRequests.Add(1)
+			_ = json.NewEncoder(response).Encode(map[string]any{"additions": 8, "deletions": 2, "changed_files": 1, "commits": 1, "merge_commit_sha": "merge-sha"})
+		case "/repos/org/repo/pulls/1/reviews":
+			_ = json.NewEncoder(response).Encode([]map[string]any{})
+		case "/repos/org/repo/pulls/1/commits":
+			_ = json.NewEncoder(response).Encode([]map[string]any{{
+				"sha": "commit-sha", "commit": map[string]any{"message": "ship\n\nCo-authored-by: agent[bot] <agent[bot]@users.noreply.github.com>"}, "author": map[string]any{"login": "human", "type": "User"},
+			}})
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	service, err := NewGitHubClient("token", server.URL, server.Client(), RateLimitCallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := service.PullRequests(context.Background(), Repository{Name: "repo", Owner: OwnerIdentity{Login: "org"}}, PullCache{
+		Version: 2, Checkpoint: checkpoint,
+		PullRequests: []PullRequest{{Number: 1, State: "closed", CreatedAt: checkpoint.Add(-48 * time.Hour), UpdatedAt: checkpoint.Add(-24 * time.Hour), Author: Person{Login: "human", Type: "User"}}},
+	})
+	if err != nil {
+		t.Fatalf("upgrade pull cache: %v", err)
+	}
+	if cache.Version != pullCacheVersion || detailRequests.Load() != 1 || len(cache.PullRequests) != 1 || !cache.PullRequests[0].DetailComplete || !cache.PullRequests[0].CommitEvidenceComplete || len(cache.PullRequests[0].CommitEvidence) != 1 {
+		t.Fatalf("v2 cache was not fully re-enriched: version=%d detail_requests=%d pulls=%+v", cache.Version, detailRequests.Load(), cache.PullRequests)
+	}
+}
+
+func TestPullCacheEnrichmentCompleteness(t *testing.T) {
+	completePull := PullRequest{DetailComplete: true, CommitEvidenceComplete: true}
+	truncatedPull := PullRequest{DetailComplete: true, Commits: 251, CommitEvidence: make([]PullRequestCommit, 250)}
+	if !pullCacheEnrichmentComplete(PullCache{Version: pullCacheVersion, PullRequests: []PullRequest{completePull, truncatedPull}}) {
+		t.Fatal("complete and intentionally capped commit evidence should allow incremental refresh")
+	}
+	if pullCacheEnrichmentComplete(PullCache{Version: pullCacheVersion, PullRequests: []PullRequest{{DetailComplete: true}}}) {
+		t.Fatal("incomplete v3 commit evidence should force full re-enrichment")
+	}
+	if pullCacheEnrichmentComplete(PullCache{Version: pullCacheVersion - 1, PullRequests: []PullRequest{completePull}}) {
+		t.Fatal("legacy cache version should force full re-enrichment")
+	}
+}
+
 func TestGitHubClientActionsRevalidatesPartitionsAndRetainsRerunAttempts(t *testing.T) {
 	now := time.Now().UTC()
 	earliest := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)

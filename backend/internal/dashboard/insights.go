@@ -604,10 +604,13 @@ func buildIdentityCatalog(reports map[int64]RepositoryReport, overrides map[stri
 		return identity
 	}
 	for _, report := range reports {
+		structuredCommitParticipants := make(map[string][]ContributorMetrics, len(report.Commits.Events))
 		for _, event := range report.Commits.Events {
 			participants := event.Participants
 			if len(participants) == 0 {
 				participants = append([]ContributorMetrics{event.Author}, commitCoauthors(event.Message)...)
+			} else {
+				structuredCommitParticipants[event.Hash] = participants
 			}
 			seen := make(map[string]struct{})
 			for _, participant := range participants {
@@ -631,6 +634,15 @@ func buildIdentityCatalog(reports map[int64]RepositoryReport, overrides map[stri
 				}
 			}
 			for _, pull := range report.Pulls.PullRequests {
+				for _, commit := range pull.CommitEvidence {
+					participants := structuredCommitParticipants[commit.SHA]
+					if len(participants) == 0 {
+						participants = append([]ContributorMetrics{personMetrics(commit.Author)}, commitCoauthors(commit.Message)...)
+					}
+					for _, participant := range participants {
+						add(participant)
+					}
+				}
 				for _, review := range pull.Reviews {
 					identity := add(personMetrics(review.Author))
 					if identity != nil {
@@ -836,15 +848,22 @@ func isCommitTrailerLine(line string) bool {
 
 func personMetrics(person Person) ContributorMetrics {
 	login := strings.TrimSpace(person.Login)
-	key := "github:" + strings.ToLower(login)
-	if login == "" {
-		key = "git:unknown"
-	}
-	name := person.Name
+	name := strings.TrimSpace(person.Name)
 	if name == "" {
 		name = login
 	}
-	return ContributorMetrics{Key: key, Login: login, Name: name, AvatarURL: person.AvatarURL, Type: person.Type}
+	key := "github:" + strings.ToLower(login)
+	if login == "" {
+		key = "git:unknown"
+		if name != "" {
+			key = gitIdentityKey(name)
+		}
+	}
+	identityType := person.Type
+	if !strings.EqualFold(identityType, "Bot") && !strings.EqualFold(identityType, "App") && (knownAgentIdentity(login) || knownAgentIdentity(name)) {
+		identityType = "AgentSignature"
+	}
+	return ContributorMetrics{Key: key, Login: login, Name: name, AvatarURL: person.AvatarURL, Type: identityType}
 }
 
 func identityAliasIndex(catalog map[string]*resolvedIdentity) map[string]*resolvedIdentity {
