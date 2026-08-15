@@ -52,6 +52,8 @@ describe('App delivery rehaul', () => {
     expect(screen.getByRole('link', { name: 'Visit Molten.bot' })).toHaveAttribute('href', 'https://molten.bot')
     expect(screen.getByRole('link', { name: 'Visit Molten.bot' })).toHaveAttribute('target', '_blank')
     expect(screen.queryByText(/Who leads this period/)).not.toBeInTheDocument()
+    expect(performanceHeading.closest('main')).not.toHaveClass('min-h-screen')
+    expect(document.querySelector('.dashboard-shell')).not.toHaveClass('pb-20')
     fireEvent.click(screen.getByRole('button', { name: 'GitHub settings' }))
     expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
   })

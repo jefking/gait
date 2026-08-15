@@ -103,7 +103,7 @@ export function DashboardView({
   ]
 
   return (
-    <div className="dashboard-shell mx-auto w-full max-w-[1560px] px-4 pb-20 pt-5 sm:px-6 lg:px-8">
+    <div className="dashboard-shell mx-auto w-full max-w-[1560px] px-4 pt-5 sm:px-6 lg:px-8">
       <header className="report-header flex flex-col justify-between gap-5 border-b border-white/8 pb-6 sm:flex-row sm:items-center">
         <div className="flex items-center gap-4">
           <a

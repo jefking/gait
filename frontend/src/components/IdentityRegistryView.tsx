@@ -2,11 +2,10 @@ import {
   Bot,
   CircleQuestionMark,
   Database,
-  GripVertical,
   Search,
   UserRound,
 } from 'lucide-react'
-import { useMemo, useState, type DragEvent } from 'react'
+import { useMemo, useState } from 'react'
 import type { ActorKind, IdentitySummary } from '../lib/api'
 import { Avatar } from './Avatar'
 
@@ -22,32 +21,24 @@ const kindDetails = {
     plural: 'Humans',
     Icon: UserRound,
     active: 'border-cyan-300/35 bg-cyan-300/10 text-cyan-100',
-    icon: 'bg-cyan-300/10 text-cyan-300 ring-cyan-300/15',
-    drop: 'hover:border-cyan-300/40 hover:bg-cyan-300/[0.08]',
   },
   agent: {
     label: 'Agent',
     plural: 'Agents',
     Icon: Bot,
     active: 'border-violet-300/35 bg-violet-300/10 text-violet-100',
-    icon: 'bg-violet-300/10 text-violet-300 ring-violet-300/15',
-    drop: 'hover:border-violet-300/40 hover:bg-violet-300/[0.08]',
   },
   unknown: {
     label: 'Unknown',
     plural: 'Unknown',
     Icon: CircleQuestionMark,
     active: 'border-amber-300/35 bg-amber-300/10 text-amber-100',
-    icon: 'bg-amber-300/10 text-amber-300 ring-amber-300/15',
-    drop: 'hover:border-amber-300/40 hover:bg-amber-300/[0.08]',
   },
 } satisfies Record<ActorKind, {
   label: string
   plural: string
   Icon: typeof Bot
   active: string
-  icon: string
-  drop: string
 }>
 
 const kinds: ActorKind[] = ['human', 'agent', 'unknown']
@@ -56,8 +47,6 @@ export function IdentityRegistryView({ identities, loading, onChange }: Identity
   const unknownCount = identities.filter((identity) => identity.kind === 'unknown').length
   const [filter, setFilter] = useState<ActorKind>('unknown')
   const [query, setQuery] = useState('')
-  const [draggedKey, setDraggedKey] = useState<string>()
-  const [dragOverKind, setDragOverKind] = useState<ActorKind>()
   const counts = useMemo(() => Object.fromEntries(kinds.map((kind) => [kind, identities.filter((identity) => identity.kind === kind).length])) as Record<ActorKind, number>, [identities])
   const visibleIdentities = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -73,14 +62,6 @@ export function IdentityRegistryView({ identities, loading, onChange }: Identity
     onChange(key, { kind })
   }
 
-  const drop = (event: DragEvent<HTMLDivElement>, kind: ActorKind) => {
-    event.preventDefault()
-    const key = event.dataTransfer.getData('text/plain') || draggedKey
-    if (key) classify(key, kind)
-    setDraggedKey(undefined)
-    setDragOverKind(undefined)
-  }
-
   return (
     <section className="mt-6" aria-labelledby="identity-registry-title">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -89,7 +70,7 @@ export function IdentityRegistryView({ identities, loading, onChange }: Identity
             <UserRound aria-hidden="true" className="size-4" /> Actor classification
           </p>
           <h2 id="identity-registry-title" className="mt-2 text-2xl font-semibold tracking-tight text-white">Identity registry</h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-400">Classify Git identities to include them in relationship insights. Drag an actor onto a classification target, or use the buttons on its card.</p>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-400">Classify Git identities to include them in relationship insights. Use the classification buttons on each actor card.</p>
           <p className="mt-2 flex items-center gap-2 text-xs text-slate-600"><Database aria-hidden="true" className="size-3.5" /> Classifications are saved automatically and restored after app restarts.</p>
         </div>
         {!loading && (
@@ -105,32 +86,7 @@ export function IdentityRegistryView({ identities, loading, onChange }: Identity
         )}
       </div>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-3" aria-label="Classification drop targets">
-        {kinds.map((kind) => {
-          const { Icon, label, plural, active, icon, drop: dropClass } = kindDetails[kind]
-          const isDragTarget = dragOverKind === kind
-          return (
-            <div
-              key={kind}
-              role="region"
-              aria-label={`Drop actor to classify as ${label}`}
-              onDragEnter={(event) => { event.preventDefault(); setDragOverKind(kind) }}
-              onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }}
-              onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOverKind(undefined) }}
-              onDrop={(event) => drop(event, kind)}
-              className={`flex min-h-32 items-center justify-center gap-4 rounded-2xl border border-dashed bg-slate-900/55 p-5 text-left transition ${isDragTarget ? active : `border-white/10 ${dropClass}`}`}
-            >
-              <span className={`grid size-12 shrink-0 place-items-center rounded-2xl ring-1 ${icon}`}><Icon aria-hidden="true" className="size-6" /></span>
-              <span>
-                <span className="block text-base font-semibold text-slate-100">{label}</span>
-                <span className="mt-1 block text-xs text-slate-500">Drop here · {counts[kind]} {counts[kind] === 1 ? label.toLocaleLowerCase() : plural.toLocaleLowerCase()}</span>
-              </span>
-            </div>
-          )
-        })}
-      </div>
-
-      <div className="mt-5 overflow-hidden rounded-3xl border border-white/8 bg-slate-900/55">
+      <div className="mt-6 overflow-hidden rounded-3xl border border-white/8 bg-slate-900/55">
         <div className="flex flex-col gap-3 border-b border-white/8 p-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex gap-2 overflow-x-auto" aria-label="Filter identities">
             {kinds.map((kind) => {
@@ -162,7 +118,7 @@ export function IdentityRegistryView({ identities, loading, onChange }: Identity
           </div>
         ) : visibleIdentities.length > 0 ? (
           <div className="grid gap-3 p-4 md:grid-cols-2">
-            {visibleIdentities.map((identity) => <IdentityCard key={identity.key} identity={identity} dragged={draggedKey === identity.key} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', identity.key); setDraggedKey(identity.key) }} onDragEnd={() => { setDraggedKey(undefined); setDragOverKind(undefined) }} onClassify={(kind) => classify(identity.key, kind)} />)}
+            {visibleIdentities.map((identity) => <IdentityCard key={identity.key} identity={identity} onClassify={(kind) => classify(identity.key, kind)} />)}
           </div>
         ) : (
           <div className="grid min-h-52 place-items-center px-6 py-12 text-center">
@@ -174,16 +130,12 @@ export function IdentityRegistryView({ identities, loading, onChange }: Identity
   )
 }
 
-function IdentityCard({ identity, dragged, onDragStart, onDragEnd, onClassify }: {
+function IdentityCard({ identity, onClassify }: {
   identity: IdentitySummary
-  dragged: boolean
-  onDragStart: (event: DragEvent<HTMLElement>) => void
-  onDragEnd: () => void
   onClassify: (kind: ActorKind) => void
 }) {
   return (
-    <article draggable onDragStart={onDragStart} onDragEnd={onDragEnd} className={`group flex min-w-0 cursor-grab items-center gap-3 rounded-2xl border border-white/8 bg-slate-950/55 p-3 transition hover:border-white/15 active:cursor-grabbing ${dragged ? 'opacity-40' : ''}`}>
-      <GripVertical aria-hidden="true" className="size-4 shrink-0 text-slate-700 transition group-hover:text-slate-500" />
+    <article className="flex min-w-0 items-center gap-3 rounded-2xl border border-white/8 bg-slate-950/55 p-3 transition hover:border-white/15">
       <Avatar src={identity.avatar_url} name={identity.name} size="md" />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-slate-200">{identity.name}</p>

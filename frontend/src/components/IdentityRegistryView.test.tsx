@@ -25,20 +25,12 @@ describe('IdentityRegistryView', () => {
     expect(screen.queryByText('Mystery Actor')).not.toBeInTheDocument()
   })
 
-  it('classifies an identity through a large drag-and-drop target', () => {
-    const onChange = vi.fn()
-    render(<IdentityRegistryView identities={identities} loading={false} onChange={onChange} />)
-    const dataTransfer = {
-      effectAllowed: 'none',
-      dropEffect: 'none',
-      getData: vi.fn(() => 'mystery'),
-      setData: vi.fn(),
-    }
+  it('does not expose drag-and-drop controls or draggable actor cards', () => {
+    render(<IdentityRegistryView identities={identities} loading={false} onChange={() => undefined} />)
 
-    fireEvent.dragStart(screen.getByText('Mystery Actor').closest('article')!, { dataTransfer })
-    fireEvent.drop(screen.getByRole('region', { name: 'Drop actor to classify as Agent' }), { dataTransfer })
-
-    expect(onChange).toHaveBeenCalledWith('mystery', { kind: 'agent' })
+    expect(screen.queryByLabelText('Classification drop targets')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Drop here/i)).not.toBeInTheDocument()
+    expect(screen.getByText('Mystery Actor').closest('article')).not.toHaveAttribute('draggable')
   })
 
   it('offers touch- and keyboard-friendly classification buttons', () => {

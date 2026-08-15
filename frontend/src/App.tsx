@@ -263,7 +263,7 @@ function App() {
   }, [])
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
+    <main className="bg-slate-950 text-slate-100">
       <div className="page-glow" aria-hidden="true" />
       {dashboard?.snapshot ? (
         <DashboardView

@@ -23,8 +23,10 @@ interface SnapPoint {
 }
 
 const dayMilliseconds = 24 * 60 * 60 * 1000
+const snapThresholdDays = 3
 const rangePresets = [
-  { id: 'month', label: '31 days', start: (maximum: Date) => addDays(maximum, -30) },
+  { id: 'month', label: '1 month', start: (maximum: Date) => addUTCMonths(maximum, -1) },
+  { id: 'three-months', label: '3 months', start: (maximum: Date) => addUTCMonths(maximum, -3) },
   { id: 'six-months', label: '6 months', start: (maximum: Date) => addUTCMonths(maximum, -6) },
   { id: 'year', label: '1 year', start: (maximum: Date) => addYears(maximum, -1) },
 ] as const
@@ -50,11 +52,11 @@ export function DateRangeSlider({
     setDraft({ scope, start: clamp(value, 0, totalDays) })
   }
   const commit = () => {
-    const snappedStart = closestSnapPoint(selected.start, snapPoints)
+    const snappedStart = snapStart(selected.start, snapPoints)
     setDraft({ scope, start: snappedStart })
     onChange(formatISODate(addDays(minimum, snappedStart)), availableTo)
   }
-  const selectedSnap = closestSnapPoint(selected.start, snapPoints)
+  const selectedSnap = nearbySnapPoint(selected.start, snapPoints)
   const timelineStart = timelineX(selected.start, totalDays)
 
   return (
@@ -85,8 +87,8 @@ export function DateRangeSlider({
               key={point.start}
               cx={timelineX(point.start, totalDays)}
               cy="16"
-              r={point.start === selectedSnap ? 5 : 3.5}
-              fill={point.start === selectedSnap ? '#67e8f9' : '#64748b'}
+              r={point.start === selectedSnap?.start ? 5 : 3.5}
+              fill={point.start === selectedSnap?.start ? '#67e8f9' : '#64748b'}
               stroke="#0f172a"
               strokeWidth="2"
               data-snap-label={point.labels.join(', ')}
@@ -104,6 +106,7 @@ export function DateRangeSlider({
           aria-valuetext={formatDisplayDate(selectedFrom)}
           min={0}
           max={rangeMaximum}
+          step={1}
           value={selected.start}
           disabled={totalDays === 0}
           onChange={(event) => updateStart(Number(event.target.value))}
@@ -115,7 +118,7 @@ export function DateRangeSlider({
       </div>
 
       <p className="sr-only" aria-live="polite">
-        The end date is fixed at {formatDisplayDate(maximum)}. The start date snaps to {snapPoints.map((point) => point.labels.join(' or ')).join(', ')}.
+        The end date is fixed at {formatDisplayDate(maximum)}. The start can be any available day and snaps when released within {snapThresholdDays} days of {snapPoints.map((point) => point.labels.join(' or ')).join(', ')}.
       </p>
 
       <div className="flex justify-between text-[10px] tabular-nums text-slate-600">
@@ -128,10 +131,7 @@ export function DateRangeSlider({
 
 function buildSnapPoints(minimum: Date, maximum: Date) {
   const points = new Map<number, SnapPoint>()
-  const candidates = [
-    ...rangePresets.map((preset) => ({ label: preset.label, date: preset.start(maximum) })),
-    { label: 'All time', date: minimum },
-  ]
+  const candidates = rangePresets.map((preset) => ({ label: preset.label, date: preset.start(maximum) }))
   for (const candidate of candidates) {
     const date = candidate.date < minimum ? minimum : candidate.date
     const start = dayOffset(minimum, date)
@@ -142,10 +142,15 @@ function buildSnapPoints(minimum: Date, maximum: Date) {
   return [...points.values()].sort((left, right) => left.start - right.start)
 }
 
-function closestSnapPoint(value: number, points: SnapPoint[]) {
-  return points.reduce((closest, point) =>
-    Math.abs(point.start - value) < Math.abs(closest - value) ? point.start : closest,
-  points[0]?.start ?? 0)
+function nearbySnapPoint(value: number, points: SnapPoint[]) {
+  const closest = points.reduce<SnapPoint | undefined>((nearest, point) =>
+    !nearest || Math.abs(point.start - value) < Math.abs(nearest.start - value) ? point : nearest,
+  undefined)
+  return closest && Math.abs(closest.start - value) <= snapThresholdDays ? closest : undefined
+}
+
+function snapStart(value: number, points: SnapPoint[]) {
+  return nearbySnapPoint(value, points)?.start ?? value
 }
 
 function timelineX(value: number, totalDays: number) {
