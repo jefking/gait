@@ -21,8 +21,15 @@ const githubAPIVersion = "2026-03-10"
 
 type GitHubService interface {
 	Viewer(context.Context) (Viewer, error)
-	Repositories(context.Context) ([]Repository, error)
+	Organizations(context.Context) ([]OwnerIdentity, error)
+	Repositories(context.Context, OwnerIdentity) ([]Repository, error)
 	PullRequests(context.Context, Repository, PullCache) (PullCache, error)
+}
+
+// GitHubRepositoryCatalogService lets the manager validate paginated owner
+// catalogs with ETags while keeping simple GitHubService test doubles small.
+type GitHubRepositoryCatalogService interface {
+	RefreshRepositories(context.Context, OwnerIdentity, RepositoryCatalog) (RepositoryCatalog, error)
 }
 
 // GitHubActionsService is optional so test doubles and installations without
@@ -84,8 +91,10 @@ func NewGitHubClient(token, baseURL string, httpClient *http.Client, callbacks R
 
 func (client *githubClient) Viewer(ctx context.Context) (Viewer, error) {
 	var response struct {
+		ID        int64  `json:"id"`
 		Login     string `json:"login"`
 		Name      string `json:"name"`
+		Type      string `json:"type"`
 		AvatarURL string `json:"avatar_url"`
 		HTMLURL   string `json:"html_url"`
 	}
@@ -95,16 +104,60 @@ func (client *githubClient) Viewer(ctx context.Context) (Viewer, error) {
 	return Viewer(response), nil
 }
 
-func (client *githubClient) Repositories(ctx context.Context) ([]Repository, error) {
-	repositories := make([]Repository, 0)
+func (client *githubClient) Organizations(ctx context.Context) ([]OwnerIdentity, error) {
+	organizations := make([]OwnerIdentity, 0)
 	for page := 1; ; page++ {
-		query := url.Values{
-			"affiliation": {"owner,collaborator,organization_member"},
-			"visibility":  {"all"},
-			"sort":        {"full_name"},
-			"direction":   {"asc"},
-			"per_page":    {"100"},
-			"page":        {strconv.Itoa(page)},
+		query := url.Values{"state": {"active"}, "per_page": {"100"}, "page": {strconv.Itoa(page)}}
+		var response []struct {
+			State        string `json:"state"`
+			Organization struct {
+				ID        int64  `json:"id"`
+				Login     string `json:"login"`
+				AvatarURL string `json:"avatar_url"`
+				HTMLURL   string `json:"html_url"`
+			} `json:"organization"`
+		}
+		if err := client.get(ctx, "/user/memberships/orgs", query, &response); err != nil {
+			return nil, err
+		}
+		for _, item := range response {
+			if !strings.EqualFold(item.State, "active") || item.Organization.ID <= 0 {
+				continue
+			}
+			organizations = append(organizations, OwnerIdentity{
+				ID: item.Organization.ID, Login: item.Organization.Login, Type: "Organization",
+				AvatarURL: item.Organization.AvatarURL, HTMLURL: item.Organization.HTMLURL,
+			})
+		}
+		if len(response) < 100 {
+			break
+		}
+	}
+	sort.Slice(organizations, func(i, j int) bool {
+		return strings.ToLower(organizations[i].Login) < strings.ToLower(organizations[j].Login)
+	})
+	return organizations, nil
+}
+
+func (client *githubClient) Repositories(ctx context.Context, target OwnerIdentity) ([]Repository, error) {
+	catalog, err := client.RefreshRepositories(ctx, target, RepositoryCatalog{})
+	if err != nil {
+		return nil, err
+	}
+	return catalog.Repositories(), nil
+}
+
+func (client *githubClient) RefreshRepositories(ctx context.Context, target OwnerIdentity, previous RepositoryCatalog) (RepositoryCatalog, error) {
+	catalog := RepositoryCatalog{Version: 1, Pages: make([]RepositoryCatalogPage, 0)}
+	for page := 1; ; page++ {
+		query := url.Values{"sort": {"full_name"}, "direction": {"asc"}, "per_page": {"100"}, "page": {strconv.Itoa(page)}}
+		endpoint := "/orgs/" + url.PathEscape(target.Login) + "/repos"
+		if strings.EqualFold(target.Type, "User") {
+			endpoint = "/user/repos"
+			query.Set("affiliation", "owner")
+			query.Set("visibility", "all")
+		} else {
+			query.Set("type", "all")
 		}
 		var response []struct {
 			ID            int64     `json:"id"`
@@ -118,6 +171,7 @@ func (client *githubClient) Repositories(ctx context.Context) ([]Repository, err
 			Archived      bool      `json:"archived"`
 			Fork          bool      `json:"fork"`
 			CreatedAt     time.Time `json:"created_at"`
+			PushedAt      time.Time `json:"pushed_at"`
 			Owner         struct {
 				ID        int64  `json:"id"`
 				Login     string `json:"login"`
@@ -126,11 +180,27 @@ func (client *githubClient) Repositories(ctx context.Context) ([]Repository, err
 				HTMLURL   string `json:"html_url"`
 			} `json:"owner"`
 		}
-		if err := client.get(ctx, "/user/repos", query, &response); err != nil {
-			return nil, err
+		var prior RepositoryCatalogPage
+		if previous.Version == 1 && page <= len(previous.Pages) {
+			prior = previous.Pages[page-1]
 		}
+		etag, notModified, err := client.getConditional(ctx, endpoint, query, prior.ETag, &response)
+		if err != nil {
+			return RepositoryCatalog{}, err
+		}
+		if notModified {
+			if etag != "" {
+				prior.ETag = etag
+			}
+			catalog.Pages = append(catalog.Pages, prior)
+			if prior.ItemCount < 100 {
+				break
+			}
+			continue
+		}
+		repositories := make([]Repository, 0, len(response))
 		for _, item := range response {
-			if !strings.EqualFold(item.Owner.Type, "Organization") {
+			if item.Owner.ID != target.ID || !strings.EqualFold(item.Owner.Type, target.Type) {
 				continue
 			}
 			defaultBranch := item.DefaultBranch
@@ -149,6 +219,7 @@ func (client *githubClient) Repositories(ctx context.Context) ([]Repository, err
 				Archived:      item.Archived,
 				Fork:          item.Fork,
 				CreatedAt:     item.CreatedAt,
+				PushedAt:      item.PushedAt,
 				Owner: OwnerIdentity{
 					ID:        item.Owner.ID,
 					Login:     item.Owner.Login,
@@ -158,11 +229,12 @@ func (client *githubClient) Repositories(ctx context.Context) ([]Repository, err
 				},
 			})
 		}
+		catalog.Pages = append(catalog.Pages, RepositoryCatalogPage{ETag: etag, ItemCount: len(response), Repositories: repositories})
 		if len(response) < 100 {
 			break
 		}
 	}
-	return repositories, nil
+	return catalog, nil
 }
 
 func (client *githubClient) PullRequests(ctx context.Context, repository Repository, previous PullCache) (PullCache, error) {

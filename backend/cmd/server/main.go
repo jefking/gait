@@ -42,9 +42,13 @@ func run() error {
 		return err
 	}
 	defer manager.Close()
-	if manager.Dashboard().Snapshot == nil && githubTokenConfigured {
-		if _, err := manager.Start(""); err != nil {
-			return err
+	if githubTokenConfigured {
+		if _, discoverErr := manager.DiscoverTargets(""); discoverErr != nil {
+			slog.Warn("GitHub target discovery failed", "error", discoverErr)
+		} else if dashboard := manager.Dashboard(); dashboard.Configuration.SelectedTarget != nil {
+			if _, startErr := manager.Start(); startErr != nil {
+				return startErr
+			}
 		}
 	}
 

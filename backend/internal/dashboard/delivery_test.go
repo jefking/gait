@@ -36,7 +36,7 @@ func TestDeliveryAttributionAndBaselineIndexInvariants(t *testing.T) {
 	report := deliveryTestReport(1, 10, "Organization", pulls)
 	personal := deliveryTestReport(2, 20, "User", []PullRequest{deliveryTestPull(99, from, Person{Login: "personal", Type: "User"}, 10000, 10000, 100)})
 	manager := &Manager{reports: map[int64]RepositoryReport{1: report, 2: personal}, identityOverrides: map[string]IdentityOverride{}}
-	response, err := manager.InsightDelivery(InsightQuery{From: &from, To: &to})
+	response, err := manager.InsightDelivery(InsightQuery{OwnerID: 10, From: &from, To: &to})
 	if err != nil {
 		t.Fatalf("delivery: %v", err)
 	}
@@ -69,6 +69,13 @@ func TestDeliveryAttributionAndBaselineIndexInvariants(t *testing.T) {
 	}
 	if response.Summary.Leader == "" {
 		t.Fatal("single leader contract was not populated")
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"organization`) || !strings.Contains(string(encoded), `"owners":1`) || !strings.Contains(string(encoded), `"owner_id":10`) || !strings.Contains(string(encoded), `"owner_type":"Organization"`) {
+		t.Fatalf("delivery JSON did not use the owner-only metadata contract: %s", encoded)
 	}
 }
 

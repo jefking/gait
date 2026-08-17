@@ -59,8 +59,20 @@ func (status SyncStatus) Active() bool {
 }
 
 type DashboardResponse struct {
-	Snapshot *Snapshot  `json:"snapshot"`
-	Sync     SyncStatus `json:"sync"`
+	Snapshot      *Snapshot           `json:"snapshot"`
+	Sync          SyncStatus          `json:"sync"`
+	Configuration GitHubConfiguration `json:"configuration"`
+}
+
+type GitHubConfiguration struct {
+	SelectedTarget   *OwnerIdentity  `json:"selected_target,omitempty"`
+	AvailableTargets []OwnerIdentity `json:"available_targets"`
+	TokenAvailable   bool            `json:"token_available"`
+}
+
+type TargetDiscovery struct {
+	Viewer  Viewer          `json:"viewer"`
+	Targets []OwnerIdentity `json:"targets"`
 }
 
 type Snapshot struct {
@@ -73,8 +85,10 @@ type Snapshot struct {
 }
 
 type Viewer struct {
+	ID        int64  `json:"id"`
 	Login     string `json:"login"`
 	Name      string `json:"name"`
+	Type      string `json:"type"`
 	AvatarURL string `json:"avatar_url"`
 	HTMLURL   string `json:"html_url"`
 }
@@ -242,18 +256,47 @@ type ActivityPoint struct {
 }
 
 type Repository struct {
-	ID            int64
-	Name          string
-	FullName      string
-	CloneURL      string
-	HTMLURL       string
-	Description   string
-	DefaultBranch string
-	Private       bool
-	Archived      bool
-	Fork          bool
-	CreatedAt     time.Time
-	Owner         OwnerIdentity
+	ID            int64         `json:"id"`
+	Name          string        `json:"name"`
+	FullName      string        `json:"full_name"`
+	CloneURL      string        `json:"clone_url"`
+	HTMLURL       string        `json:"html_url"`
+	Description   string        `json:"description,omitempty"`
+	DefaultBranch string        `json:"default_branch"`
+	Private       bool          `json:"private"`
+	Archived      bool          `json:"archived"`
+	Fork          bool          `json:"fork"`
+	CreatedAt     time.Time     `json:"created_at,omitempty"`
+	PushedAt      time.Time     `json:"pushed_at,omitempty"`
+	Owner         OwnerIdentity `json:"owner"`
+}
+
+type RepositoryCatalog struct {
+	Version int                     `json:"version"`
+	Pages   []RepositoryCatalogPage `json:"pages"`
+}
+
+type RepositoryCatalogPage struct {
+	ETag         string       `json:"etag,omitempty"`
+	ItemCount    int          `json:"item_count"`
+	Repositories []Repository `json:"repositories"`
+}
+
+func (catalog RepositoryCatalog) Repositories() []Repository {
+	repositories := make([]Repository, 0)
+	for _, page := range catalog.Pages {
+		repositories = append(repositories, page.Repositories...)
+	}
+	return repositories
+}
+
+type RepositoryCacheMetadata struct {
+	Version       int           `json:"version"`
+	Owner         OwnerIdentity `json:"owner"`
+	DefaultBranch string        `json:"default_branch"`
+	PushedAt      time.Time     `json:"pushed_at,omitempty"`
+	AnalyzedHead  string        `json:"analyzed_head,omitempty"`
+	Analyzed      bool          `json:"analyzed"`
 }
 
 type PullRequest struct {

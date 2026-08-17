@@ -58,7 +58,7 @@ func TestRepositoryRunnerClonesFetchesAndFollowsDefaultBranch(t *testing.T) {
 
 	runner := &ExecRepositoryRunner{GitBinary: gitBinary}
 	repository := Repository{ID: 1, CloneURL: remote, DefaultBranch: "main"}
-	if err := runner.Sync(context.Background(), "unused-token", repository, destination); err != nil {
+	if _, err := runner.Sync(context.Background(), "unused-token", repository, destination); err != nil {
 		t.Fatalf("clone repository: %v", err)
 	}
 	firstHead := strings.TrimSpace(runTestGit(t, gitBinary, destination, "rev-parse", "HEAD"))
@@ -71,7 +71,7 @@ func TestRepositoryRunnerClonesFetchesAndFollowsDefaultBranch(t *testing.T) {
 	runTestGit(t, gitBinary, working, "commit", "-m", "second")
 	runTestGit(t, gitBinary, working, "push", "-u", "origin", "next")
 	repository.DefaultBranch = "next"
-	if err := runner.Sync(context.Background(), "unused-token", repository, destination); err != nil {
+	if _, err := runner.Sync(context.Background(), "unused-token", repository, destination); err != nil {
 		t.Fatalf("fetch renamed default branch: %v", err)
 	}
 	secondHead := strings.TrimSpace(runTestGit(t, gitBinary, destination, "rev-parse", "HEAD"))
@@ -91,11 +91,47 @@ func TestRepositoryRunnerAcceptsEmptyRepository(t *testing.T) {
 	destination := filepath.Join(root, "cache")
 	runTestGit(t, gitBinary, "", "init", "--bare", "--initial-branch=main", remote)
 	runner := &ExecRepositoryRunner{GitBinary: gitBinary}
-	if err := runner.Sync(context.Background(), "unused-token", Repository{CloneURL: remote, DefaultBranch: "main"}, destination); err != nil {
+	if _, err := runner.Sync(context.Background(), "unused-token", Repository{CloneURL: remote, DefaultBranch: "main"}, destination); err != nil {
 		t.Fatalf("sync empty repository: %v", err)
 	}
 	if !runner.emptyRepository(context.Background(), gitBinary, destination) {
 		t.Fatal("expected repository without HEAD to be treated as empty")
+	}
+}
+
+func TestRepositoryRunnerClearsStaleHistoryWhenRemoteBecomesEmpty(t *testing.T) {
+	gitBinary, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	working := filepath.Join(root, "working")
+	destination := filepath.Join(root, "cache")
+	runTestGit(t, gitBinary, "", "init", "--bare", "--initial-branch=main", remote)
+	runTestGit(t, gitBinary, "", "init", "--initial-branch=main", working)
+	runTestGit(t, gitBinary, working, "config", "user.name", "Test User")
+	runTestGit(t, gitBinary, working, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(working, "history.txt"), []byte("history\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, gitBinary, working, "add", "history.txt")
+	runTestGit(t, gitBinary, working, "commit", "-m", "history")
+	runTestGit(t, gitBinary, working, "remote", "add", "origin", remote)
+	runTestGit(t, gitBinary, working, "push", "origin", "main")
+
+	runner := &ExecRepositoryRunner{GitBinary: gitBinary}
+	repository := Repository{CloneURL: remote, DefaultBranch: "main"}
+	if _, err := runner.Sync(context.Background(), "unused-token", repository, destination); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, gitBinary, remote, "config", "receive.denyDeleteCurrent", "ignore")
+	runTestGit(t, gitBinary, working, "push", "origin", "--delete", "main")
+	if _, err := runner.Sync(context.Background(), "unused-token", repository, destination); err != nil {
+		t.Fatalf("sync repository after branch removal: %v", err)
+	}
+	if !runner.emptyRepository(context.Background(), gitBinary, destination) {
+		t.Fatal("stale local history survived an empty remote")
 	}
 }
 

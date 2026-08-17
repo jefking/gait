@@ -23,6 +23,7 @@ import type {
   DeliveryRawMetrics,
   DeliveryResponse,
   IdentitySummary,
+  OwnerIdentity,
   Snapshot,
   SyncStatus,
 } from '../lib/api'
@@ -30,7 +31,6 @@ import { isSyncActive } from '../lib/api'
 import { Avatar } from './Avatar'
 import { DateRangeSlider } from './DateRangeSlider'
 import { IdentityRegistryView } from './IdentityRegistryView'
-import { OwnerSelect } from './OwnerSelect'
 
 interface DashboardViewProps {
   snapshot: Snapshot
@@ -40,11 +40,10 @@ interface DashboardViewProps {
   refreshing: boolean
   identities: IdentitySummary[]
   identitiesLoading: boolean
-  ownerId?: number
+  selectedTarget?: OwnerIdentity
   excludeDead: boolean
   dateFrom?: string
   dateTo?: string
-  onOwnerChange: (id?: number) => void
   onDateRangeChange: (from: string, to: string) => void
   onIdentityChange: (key: string, update: { kind?: ActorKind; display_name?: string; canonical_key?: string; unmerge?: boolean }) => void
   onRefresh: () => void
@@ -58,19 +57,19 @@ const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumF
 
 export function DashboardView({
   snapshot, sync, delivery, deliveryLoading, refreshing,
-  identities, identitiesLoading, ownerId, excludeDead, dateFrom, dateTo,
-  onOwnerChange, onDateRangeChange, onIdentityChange, onRefresh, onSettings,
+  identities, identitiesLoading, selectedTarget, excludeDead, dateFrom, dateTo,
+  onDateRangeChange, onIdentityChange, onRefresh, onSettings,
 }: DashboardViewProps) {
   const [view, setView] = useState<'dashboard' | 'identities'>('dashboard')
 
-  const organizationOwners = snapshot.owners.filter((owner) => owner.owner.type === 'Organization')
   const unknownIdentities = identities.filter((identity) => identity.kind === 'unknown').length
   const meta = delivery?.meta
   const coverage = meta?.coverage
   const period = meta?.from && meta.to ? `${meta.from} → ${meta.to}` : 'Available merged-PR history'
-  const scope = ownerId
-    ? organizationOwners.find((owner) => owner.owner.id === ownerId)?.owner.login ?? 'Selected organization'
-    : 'All organizations'
+  const scope = selectedTarget?.login ?? 'Selected GitHub owner'
+  const targetProfileURL = selectedTarget
+    ? selectedTarget.html_url || `https://github.com/${encodeURIComponent(selectedTarget.login)}`
+    : snapshot.viewer.html_url
   const cards = [
     {
       label: 'Velocity vs opening pace',
@@ -121,7 +120,7 @@ export function DashboardView({
           </div>
         </div>
         <div className="flex items-center justify-between gap-3 sm:justify-end">
-          <a href={snapshot.viewer.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-2 py-1.5 transition hover:bg-white/5"><Avatar src={snapshot.viewer.avatar_url} name={snapshot.viewer.name || snapshot.viewer.login} size="sm" /><span className="hidden text-sm font-medium text-slate-300 sm:block">{snapshot.viewer.name || snapshot.viewer.login}</span></a>
+          <a href={targetProfileURL} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-2 py-1.5 transition hover:bg-white/5"><Avatar src={selectedTarget ? selectedTarget.avatar_url : snapshot.viewer.avatar_url} name={selectedTarget?.login || snapshot.viewer.name || snapshot.viewer.login} size="sm" /><span className="hidden text-sm font-medium text-slate-300 sm:block">{selectedTarget?.login || snapshot.viewer.name || snapshot.viewer.login}</span></a>
           <div className="no-print flex gap-2"><HeaderButton label="Export PDF" onClick={() => window.print()} icon={<FileDown className="size-4" />} /><HeaderButton label="Refresh repositories" onClick={onRefresh} disabled={isSyncActive(sync)} icon={<RefreshCw className={`size-4 ${isSyncActive(sync) ? 'animate-spin' : ''}`} />} /><HeaderButton label="GitHub settings" onClick={onSettings} disabled={isSyncActive(sync)} icon={<Settings className="size-4" />} /></div>
         </div>
       </header>
@@ -135,13 +134,11 @@ export function DashboardView({
       </nav>
 
       <GlobalScope
-        owners={organizationOwners}
-        ownerId={ownerId}
+        target={selectedTarget}
         excludeDead={excludeDead}
         meta={meta}
         dateFrom={dateFrom}
         dateTo={dateTo}
-        onOwnerChange={onOwnerChange}
         onDateRangeChange={onDateRangeChange}
       />
 
@@ -185,9 +182,9 @@ export function DashboardView({
   )
 }
 
-function GlobalScope({ owners, ownerId, excludeDead, meta, dateFrom, dateTo, onOwnerChange, onDateRangeChange }: {
-  owners: Snapshot['owners']; ownerId?: number; excludeDead: boolean; meta?: DeliveryResponse['meta']; dateFrom?: string; dateTo?: string;
-  onOwnerChange:(id?:number)=>void; onDateRangeChange:(from:string,to:string)=>void
+function GlobalScope({ target, excludeDead, meta, dateFrom, dateTo, onDateRangeChange }: {
+  target?: OwnerIdentity; excludeDead: boolean; meta?: DeliveryResponse['meta']; dateFrom?: string; dateTo?: string;
+  onDateRangeChange:(from:string,to:string)=>void
 }) {
   const [expanded, setExpanded] = useState(true)
   return <section className="no-print relative mt-6 rounded-3xl border border-white/8 bg-slate-900/55 p-4 sm:p-5" aria-label="Global scope">
@@ -196,7 +193,7 @@ function GlobalScope({ owners, ownerId, excludeDead, meta, dateFrom, dateTo, onO
       {expanded ? <ChevronUp aria-hidden="true" className="size-5" /> : <ChevronDown aria-hidden="true" className="size-5" />}
     </button>
     {expanded && <div id="global-scope-controls">
-      <OwnerSelect owners={owners} value={ownerId} onChange={onOwnerChange} />
+      {target && <div className="flex items-center gap-2 text-sm text-slate-300"><Avatar src={target.avatar_url} name={target.login} size="xs" /><span>{target.login}</span><span className="text-xs text-slate-500">· {target.type === 'User' ? 'Personal account' : 'Organization'}</span></div>}
       <p className="mt-3 text-xs text-slate-500">{excludeDead ? 'Dead repositories are excluded everywhere.' : 'Dead repositories are included everywhere.'}</p>
       {meta?.available_from && meta.available_to && dateFrom && dateTo && <DateRangeSlider availableFrom={meta.available_from} availableTo={meta.available_to} from={dateFrom} to={dateTo} granularity={meta.granularity} onChange={onDateRangeChange} />}
     </div>}

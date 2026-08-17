@@ -7,12 +7,15 @@ import {
   getIdentities,
   getInsightDelivery,
   isSyncActive,
+  discoverGitHubTargets,
+  selectGitHubTarget,
   startSync,
   subscribeToDashboardEvents,
   type DashboardResponse,
   type ActorKind,
   type DeliveryResponse,
   type IdentitySummary,
+  type OwnerIdentity,
   updateIdentity as updateIdentityClassification,
 } from './lib/api'
 
@@ -34,7 +37,7 @@ function App() {
   const [modalError, setModalError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
 
-  const [ownerId, setOwnerId] = useState<number>()
+  const [discoveredTargets, setDiscoveredTargets] = useState<OwnerIdentity[]>([])
   const [excludeDead, setExcludeDead] = useState(false)
   const [dateRange, setDateRange] = useState<{ from: string; to: string; userSelected: boolean }>()
   const [insightEpoch, setInsightEpoch] = useState(0)
@@ -74,18 +77,21 @@ function App() {
 
   const applyDashboard = useCallback((response: DashboardResponse) => {
     setDashboard((current) => ({
-      snapshot: current?.snapshot && current.snapshot.generated_at === response.snapshot?.generated_at
+      snapshot: current?.snapshot && current.snapshot.generated_at === response.snapshot?.generated_at &&
+        current.configuration.selected_target?.id === response.configuration?.selected_target?.id
         ? current.snapshot
         : response.snapshot,
       sync: response.sync,
+      configuration: response.configuration ?? current?.configuration ?? { available_targets: [], token_available: false },
     }))
     queueContentGeneration(response.snapshot?.generated_at)
+    setDiscoveredTargets(response.configuration?.available_targets ?? [])
     setDashboardError(undefined)
     if (response.sync.state === 'failed') {
       setModalMode('connect')
       setModalError(response.sync.message || 'The sync failed.')
       setModalOpen(true)
-    } else if (!response.snapshot && !isSyncActive(response.sync)) {
+    } else if ((!response.snapshot || !response.configuration?.selected_target) && !isSyncActive(response.sync)) {
       setModalMode('connect')
       setModalOpen(true)
     }
@@ -112,7 +118,7 @@ function App() {
   const selectedFrom = dateRange?.from
   const selectedTo = dateRange?.to
   const insightScopeKey = dashboard?.snapshot
-    ? [ownerId ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? ''].join(':')
+    ? [dashboard.configuration.selected_target?.id ?? '', excludeDead, selectedFrom ?? '', selectedTo ?? ''].join(':')
     : ''
   const insightRequestKey = insightScopeKey && contentGeneration
     ? `${contentGeneration}:${insightEpoch}:${insightScopeKey}`
@@ -189,7 +195,7 @@ function App() {
   useEffect(() => {
     if (!insightRequestKey) return
     const controller = new AbortController()
-    const filters = { organizationId: ownerId, excludeDead, from: selectedFrom, to: selectedTo }
+    const filters = { excludeDead, from: selectedFrom, to: selectedTo }
     Promise.all([
       getInsightDelivery(filters, controller.signal),
       getIdentities(filters, controller.signal),
@@ -220,18 +226,38 @@ function App() {
         setDashboardError(error instanceof Error ? error.message : 'Could not load team delivery evidence.')
       })
     return () => controller.abort()
-  }, [insightRequestKey, insightScopeKey, ownerId, excludeDead, selectedFrom, selectedTo])
+  }, [insightRequestKey, insightScopeKey, excludeDead, selectedFrom, selectedTo])
 
-  const connect = async (pat: string) => {
+  const discoverTargets = async (pat?: string) => {
     setSubmitting(true)
     setModalError(undefined)
     try {
-      const sync = await startSync(pat)
-      setDashboard((current) => ({ snapshot: current?.snapshot ?? null, sync }))
+      const discovery = await discoverGitHubTargets(pat)
+      setDiscoveredTargets(discovery.targets)
+      setDashboard((current) => current ? {
+        ...current,
+        configuration: { ...current.configuration, available_targets: discovery.targets, token_available: true },
+      } : current)
+      setDashboardError(undefined)
+    } catch (error) {
+      setModalError(error instanceof Error ? error.message : 'Could not discover GitHub accounts.')
+      throw error
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const chooseTarget = async (targetId: number) => {
+    setSubmitting(true)
+    setModalError(undefined)
+    try {
+      const response = await selectGitHubTarget(targetId)
+      applyDashboard(response)
       setDashboardError(undefined)
       setModalOpen(false)
     } catch (error) {
-      setModalError(error instanceof Error ? error.message : 'Could not start the sync.')
+      setModalError(error instanceof Error ? error.message : 'Could not select the GitHub owner.')
+      throw error
     } finally {
       setSubmitting(false)
     }
@@ -241,19 +267,21 @@ function App() {
     setDashboardError(undefined)
     try {
       const sync = await startSync()
-      setDashboard((current) => ({ snapshot: current?.snapshot ?? null, sync }))
+      setDashboard((current) => current ? { ...current, sync } : null)
     } catch (error) {
-      setDashboardError(error instanceof Error ? error.message : 'Could not refresh repositories.')
+      const message = error instanceof Error ? error.message : 'Could not refresh repositories.'
+      setDashboardError(message)
+      if (message.toLowerCase().includes('pat is required')) {
+        setDashboardError(undefined)
+        setModalError('Enter a GitHub PAT to refresh this cached target.')
+        setModalMode('settings')
+        setModalOpen(true)
+      }
     }
   }
 
   const changeDateRange = useCallback((from: string, to: string) => {
     setDateRange({ from, to, userSelected: true })
-  }, [])
-
-  const changeOrganization = useCallback((id?: number) => {
-    setOwnerId(id)
-    setDateRange(undefined)
   }, [])
 
   const changeIdentity = useCallback((key: string, update: { kind?: ActorKind; display_name?: string; canonical_key?: string; unmerge?: boolean }) => {
@@ -274,11 +302,10 @@ function App() {
           refreshing={Boolean(insightRequestKey) && deliveryResult?.key !== insightRequestKey}
           identities={identities}
           identitiesLoading={identitiesLoading}
-          ownerId={ownerId}
+          selectedTarget={dashboard.configuration.selected_target}
           excludeDead={excludeDead}
           dateFrom={dateRange?.from}
           dateTo={dateRange?.to}
-          onOwnerChange={changeOrganization}
           onDateRangeChange={changeDateRange}
           onIdentityChange={changeIdentity}
           onRefresh={() => void refresh()}
@@ -313,12 +340,16 @@ function App() {
         hasCachedData={Boolean(dashboard?.snapshot)}
         submitting={submitting}
         error={modalError}
+        targets={discoveredTargets}
+        selectedTarget={dashboard?.configuration.selected_target}
+        tokenAvailable={dashboard?.configuration.token_available ?? false}
         excludeDead={excludeDead}
         onExcludeDeadChange={(next) => {
           setExcludeDead(next)
         }}
-        onSubmit={connect}
-        onViewCached={() => {
+        onDiscover={discoverTargets}
+        onSelectTarget={chooseTarget}
+        onClose={() => {
           setModalError(undefined)
           setModalOpen(false)
         }}

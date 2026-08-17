@@ -17,8 +17,16 @@ import (
 )
 
 type RepositoryRunner interface {
-	Sync(context.Context, string, Repository, string) error
+	Sync(context.Context, string, Repository, string) (RepositorySyncResult, error)
 	Analyze(context.Context, string, string) (CommitStats, error)
+}
+
+type RepositoryCacheInspector interface {
+	CachedHead(context.Context, string) (string, bool)
+}
+
+type RepositorySyncResult struct {
+	Head string
 }
 
 type ExecRepositoryRunner struct {
@@ -30,65 +38,92 @@ func NewExecRepositoryRunner() *ExecRepositoryRunner {
 	return &ExecRepositoryRunner{GitBinary: "git", AnalyzerBinary: "git-changes-by-day"}
 }
 
-func (runner *ExecRepositoryRunner) Sync(ctx context.Context, token string, repository Repository, destination string) error {
+func (runner *ExecRepositoryRunner) CachedHead(ctx context.Context, repositoryPath string) (string, bool) {
+	gitBinary := runner.GitBinary
+	if gitBinary == "" {
+		gitBinary = "git"
+	}
+	if _, err := runner.runGit(ctx, gitBinary, repositoryPath, "", "", "rev-parse", "--is-inside-work-tree"); err != nil {
+		return "", false
+	}
+	head, err := runner.runGit(ctx, gitBinary, repositoryPath, "", "", "rev-parse", "HEAD")
+	if err == nil {
+		return strings.TrimSpace(string(head)), true
+	}
+	return "", runner.emptyRepository(ctx, gitBinary, repositoryPath)
+}
+
+func (runner *ExecRepositoryRunner) Sync(ctx context.Context, token string, repository Repository, destination string) (RepositorySyncResult, error) {
 	gitBinary := runner.GitBinary
 	if gitBinary == "" {
 		gitBinary = "git"
 	}
 	if repository.CloneURL == "" {
-		return errors.New("repository has no HTTPS clone URL")
+		return RepositorySyncResult{}, errors.New("repository has no HTTPS clone URL")
 	}
 	_, statErr := os.Stat(destination)
 	exists := statErr == nil
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		return fmt.Errorf("inspect repository workspace: %w", statErr)
+		return RepositorySyncResult{}, fmt.Errorf("inspect repository workspace: %w", statErr)
 	}
 	if exists {
 		if _, err := runner.runGit(ctx, gitBinary, destination, "", "", "rev-parse", "--is-inside-work-tree"); err != nil {
 			if removeErr := os.RemoveAll(destination); removeErr != nil {
-				return fmt.Errorf("replace invalid cached repository: %w", removeErr)
+				return RepositorySyncResult{}, fmt.Errorf("replace invalid cached repository: %w", removeErr)
 			}
 			exists = false
 		}
 	}
 	if !exists {
 		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
-			return fmt.Errorf("create repository workspace: %w", err)
+			return RepositorySyncResult{}, fmt.Errorf("create repository workspace: %w", err)
 		}
 		if _, err := runner.runGit(ctx, gitBinary, "", token, repository.CloneURL,
 			"clone", "--no-tags", "--single-branch", repository.CloneURL, destination); err != nil {
 			_ = os.RemoveAll(destination)
-			return fmt.Errorf("clone repository: %w", err)
+			return RepositorySyncResult{}, fmt.Errorf("clone repository: %w", err)
 		}
 	} else {
 		if _, err := runner.runGit(ctx, gitBinary, destination, "", "", "remote", "set-url", "origin", repository.CloneURL); err != nil {
-			return fmt.Errorf("update repository remote: %w", err)
+			return RepositorySyncResult{}, fmt.Errorf("update repository remote: %w", err)
 		}
 		refspec := "+refs/heads/" + repository.DefaultBranch + ":refs/remotes/origin/" + repository.DefaultBranch
 		if _, err := runner.runGit(ctx, gitBinary, destination, token, repository.CloneURL, "fetch", "--prune", "--no-tags", "origin", refspec); err != nil {
 			output, remoteErr := runner.runGit(ctx, gitBinary, destination, token, repository.CloneURL,
 				"ls-remote", "--heads", "origin", "refs/heads/"+repository.DefaultBranch)
 			if remoteErr != nil || strings.TrimSpace(string(output)) != "" {
-				return fmt.Errorf("fetch default branch: %w", err)
+				return RepositorySyncResult{}, fmt.Errorf("fetch default branch: %w", err)
 			}
-			return nil
+			// A previously populated repository can become empty. Re-cloning is
+			// safer than analyzing the stale local branch that Git otherwise keeps.
+			if removeErr := os.RemoveAll(destination); removeErr != nil {
+				return RepositorySyncResult{}, fmt.Errorf("replace repository after default branch removal: %w", removeErr)
+			}
+			if _, cloneErr := runner.runGit(ctx, gitBinary, "", token, repository.CloneURL,
+				"clone", "--no-tags", "--single-branch", repository.CloneURL, destination); cloneErr != nil {
+				return RepositorySyncResult{}, fmt.Errorf("re-clone repository without a default branch: %w", cloneErr)
+			}
 		}
 	}
 
 	remoteRef := "refs/remotes/origin/" + repository.DefaultBranch
 	if _, err := runner.runGit(ctx, gitBinary, destination, "", "", "show-ref", "--verify", remoteRef); err != nil {
 		if runner.emptyRepository(ctx, gitBinary, destination) {
-			return nil
+			return RepositorySyncResult{}, nil
 		}
-		return fmt.Errorf("locate default branch %q: %w", repository.DefaultBranch, err)
+		return RepositorySyncResult{}, fmt.Errorf("locate default branch %q: %w", repository.DefaultBranch, err)
 	}
 	if _, err := runner.runGit(ctx, gitBinary, destination, "", "", "checkout", "--force", "-B", repository.DefaultBranch, "origin/"+repository.DefaultBranch); err != nil {
-		return fmt.Errorf("check out default branch: %w", err)
+		return RepositorySyncResult{}, fmt.Errorf("check out default branch: %w", err)
 	}
 	if _, err := runner.runGit(ctx, gitBinary, destination, "", "", "reset", "--hard", "origin/"+repository.DefaultBranch); err != nil {
-		return fmt.Errorf("reset default branch: %w", err)
+		return RepositorySyncResult{}, fmt.Errorf("reset default branch: %w", err)
 	}
-	return nil
+	head, err := runner.runGit(ctx, gitBinary, destination, "", "", "rev-parse", "HEAD")
+	if err != nil {
+		return RepositorySyncResult{}, fmt.Errorf("read default branch HEAD: %w", err)
+	}
+	return RepositorySyncResult{Head: strings.TrimSpace(string(head))}, nil
 }
 
 func (runner *ExecRepositoryRunner) Analyze(ctx context.Context, repositoryPath, outputPath string) (CommitStats, error) {

@@ -56,7 +56,7 @@ func TestGitHubClientPaginatesRepositoriesAndUsesBearerToken(t *testing.T) {
 		switch request.URL.Path {
 		case "/user":
 			_ = json.NewEncoder(response).Encode(map[string]any{"login": "viewer", "name": "Viewer"})
-		case "/user/repos":
+		case "/orgs/org/repos":
 			repoRequests.Add(1)
 			page, _ := strconv.Atoi(request.URL.Query().Get("page"))
 			count := 100
@@ -87,7 +87,7 @@ func TestGitHubClientPaginatesRepositoriesAndUsesBearerToken(t *testing.T) {
 	if err != nil || viewer.Login != "viewer" {
 		t.Fatalf("load viewer: %+v, %v", viewer, err)
 	}
-	repositories, err := service.Repositories(context.Background())
+	repositories, err := service.Repositories(context.Background(), OwnerIdentity{ID: 7, Login: "org", Type: "Organization"})
 	if err != nil {
 		t.Fatalf("list repositories: %v", err)
 	}
@@ -96,6 +96,140 @@ func TestGitHubClientPaginatesRepositoriesAndUsesBearerToken(t *testing.T) {
 	}
 	if repositories[0].CreatedAt.Format(time.DateOnly) != "2020-01-02" {
 		t.Fatalf("repository creation metadata was not retained: %+v", repositories[0])
+	}
+}
+
+func TestGitHubClientDiscoversPaginatedActiveMembershipsForFineGrainedPATs(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/user/orgs" {
+			t.Fatal("fine-grained discovery must not use /user/orgs")
+		}
+		if request.URL.Path != "/user/memberships/orgs" || request.URL.Query().Get("state") != "active" {
+			http.NotFound(response, request)
+			return
+		}
+		requests.Add(1)
+		page, _ := strconv.Atoi(request.URL.Query().Get("page"))
+		count := 100
+		if page == 2 {
+			count = 1
+		}
+		memberships := make([]map[string]any, count)
+		for index := range count {
+			id := int64((page-1)*100 + index + 1)
+			memberships[index] = map[string]any{
+				"state":        "active",
+				"organization": map[string]any{"id": id, "login": fmt.Sprintf("org-%03d", id), "avatar_url": "avatar", "html_url": "profile"},
+			}
+		}
+		_ = json.NewEncoder(response).Encode(memberships)
+	}))
+	defer server.Close()
+	service, err := NewGitHubClient("fine-grained-token", server.URL, server.Client(), RateLimitCallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizations, err := service.Organizations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(organizations) != 101 || requests.Load() != 2 || organizations[0].Type != "Organization" {
+		t.Fatalf("unexpected membership discovery: requests=%d organizations=%+v", requests.Load(), organizations)
+	}
+}
+
+func TestGitHubClientUsesOwnerSpecificRepositoryEndpointsAndExactFiltering(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		matchingOwner := map[string]any{"id": 9, "login": "viewer", "type": "User"}
+		switch request.URL.Path {
+		case "/user/repos":
+			if request.URL.Query().Get("affiliation") != "owner" || request.URL.Query().Get("visibility") != "all" {
+				t.Errorf("unexpected personal query: %s", request.URL.RawQuery)
+			}
+			_ = json.NewEncoder(response).Encode([]map[string]any{
+				{"id": 1, "name": "private-fork", "full_name": "viewer/private-fork", "private": true, "fork": true, "archived": true, "default_branch": "main", "owner": matchingOwner},
+				{"id": 2, "name": "member-repo", "full_name": "acme/member-repo", "default_branch": "main", "owner": map[string]any{"id": 7, "login": "acme", "type": "Organization"}},
+			})
+		case "/orgs/acme/repos":
+			if request.URL.Query().Get("type") != "all" {
+				t.Errorf("unexpected organization query: %s", request.URL.RawQuery)
+			}
+			_ = json.NewEncoder(response).Encode([]map[string]any{
+				{"id": 3, "name": "archive", "full_name": "acme/archive", "fork": true, "archived": true, "default_branch": "trunk", "owner": map[string]any{"id": 7, "login": "acme", "type": "Organization"}},
+				{"id": 4, "name": "wrong-id", "full_name": "impostor/wrong-id", "default_branch": "main", "owner": map[string]any{"id": 8, "login": "acme", "type": "Organization"}},
+			})
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	service, err := NewGitHubClient("token", server.URL, server.Client(), RateLimitCallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	personal, err := service.Repositories(context.Background(), OwnerIdentity{ID: 9, Login: "viewer", Type: "User"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	organization, err := service.Repositories(context.Background(), OwnerIdentity{ID: 7, Login: "acme", Type: "Organization"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(personal) != 1 || !personal[0].Private || !personal[0].Fork || !personal[0].Archived {
+		t.Fatalf("personal owner filtering lost repository visibility flags: %+v", personal)
+	}
+	if len(organization) != 1 || organization[0].ID != 3 || !organization[0].Fork || !organization[0].Archived {
+		t.Fatalf("organization owner filtering was not exact: %+v", organization)
+	}
+}
+
+func TestGitHubClientConditionallyRefreshesEveryCachedCatalogPage(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		if request.URL.Path != "/orgs/acme/repos" {
+			http.NotFound(response, request)
+			return
+		}
+		page, _ := strconv.Atoi(request.URL.Query().Get("page"))
+		etag := fmt.Sprintf(`"catalog-page-%d"`, page)
+		if request.Header.Get("If-None-Match") == etag {
+			response.Header().Set("ETag", etag)
+			response.WriteHeader(http.StatusNotModified)
+			return
+		}
+		response.Header().Set("ETag", etag)
+		count := 100
+		if page == 2 {
+			count = 1
+		}
+		items := make([]map[string]any, count)
+		for index := range count {
+			id := int64((page-1)*100 + index + 1)
+			items[index] = map[string]any{
+				"id": id, "name": fmt.Sprintf("repo-%d", id), "full_name": fmt.Sprintf("acme/repo-%d", id), "default_branch": "main", "pushed_at": "2025-01-01T00:00:00Z",
+				"owner": map[string]any{"id": 7, "login": "acme", "type": "Organization"},
+			}
+		}
+		_ = json.NewEncoder(response).Encode(items)
+	}))
+	defer server.Close()
+	service, err := NewGitHubClient("token", server.URL, server.Client(), RateLimitCallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogService := service.(GitHubRepositoryCatalogService)
+	first, err := catalogService.RefreshRepositories(context.Background(), OwnerIdentity{ID: 7, Login: "acme", Type: "Organization"}, RepositoryCatalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := catalogService.RefreshRepositories(context.Background(), OwnerIdentity{ID: 7, Login: "acme", Type: "Organization"}, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 4 || len(second.Repositories()) != 101 || len(second.Pages) != 2 || second.Pages[1].ETag != `"catalog-page-2"` {
+		t.Fatalf("conditional repository catalog refresh lost cached data: requests=%d catalog=%+v", requests.Load(), second)
 	}
 }
 

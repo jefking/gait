@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getIdentities, getInsightDelivery, getInsightNetwork, startSync, subscribeToDashboardEvents } from './api'
+import { discoverGitHubTargets, getIdentities, getInsightDelivery, getInsightNetwork, selectGitHubTarget, startSync, subscribeToDashboardEvents } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -10,13 +10,12 @@ describe('API client', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
     const scope = {
-      organizationId: 7,
       excludeDead: true,
       from: '2024-01-02',
       to: '2024-03-04',
     }
     await Promise.all([getInsightDelivery(scope), getInsightNetwork(scope), getIdentities(scope)])
-    const query = 'organization_id=7&exclude_dead=true&from=2024-01-02&to=2024-03-04'
+    const query = 'exclude_dead=true&from=2024-01-02&to=2024-03-04'
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       `/api/insights/delivery?${query}`,
       `/api/insights/network?${query}`,
@@ -24,16 +23,26 @@ describe('API client', () => {
     ])
   })
 
-  it('sends a PAT in the one sync request body', async () => {
+  it('sends a PAT only to target discovery', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ sync: { state: 'discovering' } }), { status: 202 }),
     )
     vi.stubGlobal('fetch', fetchMock)
-    await startSync('ghp_secret')
+    await discoverGitHubTargets('ghp_secret')
     expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ pat: 'ghp_secret' }),
     }))
+  })
+
+  it('persists the selected GitHub target through configuration', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 202 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await selectGitHubTarget(42)
+    expect(fetchMock.mock.calls[0]).toEqual(expect.arrayContaining([
+      '/api/configuration/github-target',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ target_id: 42 }) }),
+    ]))
   })
 
   it('requests a refresh without resending a PAT', async () => {

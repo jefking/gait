@@ -30,7 +30,7 @@ export interface RepositoryWorkflow {
 }
 
 export interface DashboardEvent {
-  type: 'sync' | 'snapshot' | 'dashboard' | 'insights'
+  type: 'sync' | 'snapshot' | 'dashboard' | 'insights' | 'configuration'
   revision: number
   repository?: RepositoryEventMetadata
 }
@@ -43,8 +43,10 @@ export interface RepositoryEventMetadata {
 }
 
 export interface Viewer {
+  id: number
   login: string
   name: string
+  type: string
   avatar_url: string
   html_url: string
 }
@@ -160,6 +162,18 @@ export interface Snapshot {
 export interface DashboardResponse {
   snapshot: Snapshot | null
   sync: SyncStatus
+  configuration: GitHubConfiguration
+}
+
+export interface GitHubConfiguration {
+  selected_target?: OwnerIdentity
+  available_targets: OwnerIdentity[]
+  token_available: boolean
+}
+
+export interface TargetDiscovery {
+  viewer: Viewer
+  targets: OwnerIdentity[]
 }
 
 export type ActivityGranularity = 'day' | 'week' | 'month'
@@ -231,7 +245,7 @@ export interface NetworkResponse {
 }
 
 export interface DeliveryCoverage {
-  organizations: number
+  owners: number
   repositories: number
   index_eligible_repositories: number
   merged_pull_requests: number
@@ -258,8 +272,9 @@ export interface DeliveryMeta {
   to?: string
   granularity?: ActivityGranularity
   scope: {
-    organization_id?: number
-    organization?: string
+    owner_id?: number
+    owner?: string
+    owner_type?: string
     repository_id?: number
     repository?: string
     exclude_dead: boolean
@@ -403,7 +418,6 @@ export interface DeliveryResponse {
 }
 
 export interface DeliveryFilters {
-  organizationId?: number
   excludeDead?: boolean
   from?: string
   to?: string
@@ -450,7 +464,6 @@ export function getDashboard(signal?: AbortSignal): Promise<DashboardResponse> {
 
 function deliveryQuery(filters: DeliveryFilters) {
   const query = new URLSearchParams()
-  if (filters.organizationId) query.set('organization_id', String(filters.organizationId))
   if (filters.excludeDead) query.set('exclude_dead', 'true')
   if (filters.from) query.set('from', filters.from)
   if (filters.to) query.set('to', filters.to)
@@ -482,14 +495,29 @@ export function updateIdentity(
   })
 }
 
-export async function startSync(
-  pat?: string,
-  signal?: AbortSignal,
-): Promise<SyncStatus> {
-  const response = await requestJSON<{ sync: SyncStatus }>('/api/sync', {
+export async function discoverGitHubTargets(pat?: string, signal?: AbortSignal): Promise<TargetDiscovery> {
+  return requestJSON<TargetDiscovery>('/api/github/targets', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(pat ? { pat } : {}),
+    signal,
+  })
+}
+
+export function selectGitHubTarget(targetId: number, signal?: AbortSignal): Promise<DashboardResponse> {
+  return requestJSON<DashboardResponse>('/api/configuration/github-target', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_id: targetId }),
+    signal,
+  })
+}
+
+export async function startSync(signal?: AbortSignal): Promise<SyncStatus> {
+  const response = await requestJSON<{ sync: SyncStatus }>('/api/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
     signal,
   })
   return response.sync

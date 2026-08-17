@@ -12,7 +12,9 @@ import (
 
 type DashboardService interface {
 	Dashboard() dashboard.DashboardResponse
-	Start(string) (dashboard.SyncStatus, error)
+	DiscoverTargets(string) (dashboard.TargetDiscovery, error)
+	SelectTarget(int64) (dashboard.DashboardResponse, error)
+	Start() (dashboard.SyncStatus, error)
 	Subscribe(context.Context) <-chan dashboard.DashboardEvent
 }
 
@@ -43,6 +45,8 @@ func NewRouter(staticDir string, services ...DashboardService) http.Handler {
 			router.Patch("/api/identities/{key}", updateIdentityHandler(insights))
 		}
 		router.Get("/api/events", eventsHandler(service))
+		router.Post("/api/github/targets", githubTargetsHandler(service))
+		router.Put("/api/configuration/github-target", selectGitHubTargetHandler(service))
 		router.Post("/api/sync", syncHandler(service))
 	}
 

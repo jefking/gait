@@ -13,7 +13,7 @@ import (
 const deliveryBootstrapSamples = 1000
 
 type DeliveryCoverage struct {
-	Organizations             int     `json:"organizations"`
+	Owners                    int     `json:"owners"`
 	Repositories              int     `json:"repositories"`
 	IndexEligibleRepositories int     `json:"index_eligible_repositories"`
 	MergedPullRequests        int     `json:"merged_pull_requests"`
@@ -34,11 +34,12 @@ type DeliveryCoverage struct {
 }
 
 type DeliveryScope struct {
-	OrganizationID int64  `json:"organization_id,omitempty"`
-	Organization   string `json:"organization,omitempty"`
-	RepositoryID   int64  `json:"repository_id,omitempty"`
-	Repository     string `json:"repository,omitempty"`
-	ExcludeDead    bool   `json:"exclude_dead"`
+	OwnerID      int64  `json:"owner_id,omitempty"`
+	Owner        string `json:"owner,omitempty"`
+	OwnerType    string `json:"owner_type,omitempty"`
+	RepositoryID int64  `json:"repository_id,omitempty"`
+	Repository   string `json:"repository,omitempty"`
+	ExcludeDead  bool   `json:"exclude_dead"`
 }
 
 type DeliveryMeta struct {
@@ -246,10 +247,15 @@ type deliveryFlowAccumulator struct {
 }
 
 func (manager *Manager) InsightDelivery(query InsightQuery) (DeliveryResponse, error) {
-	reports, overrides := manager.insightState()
+	reports, overrides, selectedTarget := manager.insightStateWithTarget()
 	query, meta, err := prepareDeliveryQuery(reports, query)
 	if err != nil {
 		return DeliveryResponse{}, err
+	}
+	if selectedTarget != nil {
+		meta.Scope.OwnerID = selectedTarget.ID
+		meta.Scope.Owner = selectedTarget.Login
+		meta.Scope.OwnerType = selectedTarget.Type
 	}
 	return buildDelivery(reports, overrides, query, meta), nil
 }
@@ -278,7 +284,7 @@ func prepareDeliveryQuery(reports map[int64]RepositoryReport, query InsightQuery
 			}
 		}
 	}
-	meta := DeliveryMeta{Scope: DeliveryScope{OrganizationID: query.OwnerID, RepositoryID: query.RepositoryID, ExcludeDead: query.ExcludeDead}}
+	meta := DeliveryMeta{Scope: DeliveryScope{RepositoryID: query.RepositoryID, ExcludeDead: query.ExcludeDead}}
 	if availableFrom.IsZero() {
 		meta.Unavailable = []string{"merged_pull_request_evidence_unavailable"}
 		return query, meta, nil
@@ -308,20 +314,23 @@ func prepareDeliveryQuery(reports map[int64]RepositoryReport, query InsightQuery
 		if !deliveryReportMatches(report, query) {
 			continue
 		}
-		if query.OwnerID != 0 && meta.Scope.Organization == "" {
-			meta.Scope.Organization = report.Repository.Owner.Login
+		if meta.Scope.Owner == "" {
+			meta.Scope.OwnerID = report.Repository.Owner.ID
+			meta.Scope.Owner = report.Repository.Owner.Login
+			meta.Scope.OwnerType = report.Repository.Owner.Type
 		}
 		if query.RepositoryID != 0 && meta.Scope.Repository == "" {
 			meta.Scope.Repository = report.Repository.FullName
-			meta.Scope.OrganizationID = report.Repository.Owner.ID
-			meta.Scope.Organization = report.Repository.Owner.Login
+			meta.Scope.OwnerID = report.Repository.Owner.ID
+			meta.Scope.Owner = report.Repository.Owner.Login
+			meta.Scope.OwnerType = report.Repository.Owner.Type
 		}
 	}
 	return query, meta, nil
 }
 
 func deliveryReportMatches(report RepositoryReport, query InsightQuery) bool {
-	return isOrganizationRepository(report.Repository) && insightReportMatches(report, query)
+	return insightReportMatches(report, query)
 }
 
 func buildDelivery(reports map[int64]RepositoryReport, overrides map[string]IdentityOverride, query InsightQuery, meta DeliveryMeta) DeliveryResponse {
@@ -348,14 +357,14 @@ func buildDelivery(reports map[int64]RepositoryReport, overrides map[string]Iden
 		return response
 	}
 	selectedReports := make(map[int64]RepositoryReport)
-	organizations := make(map[int64]struct{})
+	owners := make(map[int64]struct{})
 	for id, report := range reports {
 		if deliveryReportMatches(report, query) {
 			selectedReports[id] = report
-			organizations[report.Repository.Owner.ID] = struct{}{}
+			owners[report.Repository.Owner.ID] = struct{}{}
 		}
 	}
-	response.Meta.Coverage.Organizations = len(organizations)
+	response.Meta.Coverage.Owners = len(owners)
 	response.Meta.Coverage.Repositories = len(selectedReports)
 	response.Meta.Coverage.DirectCommitCoverage = true
 	catalog := buildIdentityCatalog(selectedReports, overrides)

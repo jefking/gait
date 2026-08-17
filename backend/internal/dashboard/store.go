@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 type Store struct {
@@ -21,7 +22,7 @@ func NewStore(root string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve data directory: %w", err)
 	}
-	for _, directory := range []string{absolute, filepath.Join(absolute, "repos"), filepath.Join(absolute, "reports")} {
+	for _, directory := range []string{absolute, filepath.Join(absolute, "repos"), filepath.Join(absolute, "reports"), filepath.Join(absolute, "targets")} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil, fmt.Errorf("create data directory %q: %w", directory, err)
 		}
@@ -51,6 +52,115 @@ func (store *Store) analysisPath(repositoryID int64) string {
 
 func (store *Store) actionsPath(repositoryID int64) string {
 	return filepath.Join(store.reportDir(repositoryID), "actions.json")
+}
+
+func (store *Store) metadataPath(repositoryID int64) string {
+	return filepath.Join(store.reportDir(repositoryID), "metadata.json")
+}
+
+type persistedConfiguration struct {
+	Version      int            `json:"version"`
+	GitHubTarget *OwnerIdentity `json:"github_target,omitempty"`
+}
+
+func targetCacheKey(target OwnerIdentity) string {
+	targetType := strings.ToLower(strings.TrimSpace(target.Type))
+	if targetType != "organization" && targetType != "user" {
+		targetType = "owner"
+	}
+	return targetType + "-" + strconv.FormatInt(target.ID, 10)
+}
+
+func (store *Store) targetSnapshotPath(target OwnerIdentity) string {
+	return filepath.Join(store.root, "targets", targetCacheKey(target), "snapshot.json")
+}
+
+func (store *Store) targetCatalogPath(target OwnerIdentity) string {
+	return filepath.Join(store.root, "targets", targetCacheKey(target), "repositories.json")
+}
+
+func (store *Store) LoadConfiguration() (*OwnerIdentity, error) {
+	file, err := os.Open(filepath.Join(store.root, "configuration.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open configuration: %w", err)
+	}
+	defer file.Close()
+	var configuration persistedConfiguration
+	if err := json.NewDecoder(file).Decode(&configuration); err != nil {
+		return nil, fmt.Errorf("decode configuration: %w", err)
+	}
+	if configuration.Version != 1 || configuration.GitHubTarget == nil || configuration.GitHubTarget.ID <= 0 ||
+		strings.TrimSpace(configuration.GitHubTarget.Login) == "" ||
+		!strings.EqualFold(configuration.GitHubTarget.Type, "User") && !strings.EqualFold(configuration.GitHubTarget.Type, "Organization") {
+		return nil, errors.New("unsupported GitHub target configuration")
+	}
+	target := *configuration.GitHubTarget
+	return &target, nil
+}
+
+func (store *Store) SaveConfiguration(target OwnerIdentity) error {
+	copyTarget := target
+	return store.writeJSON(filepath.Join(store.root, "configuration.json"), persistedConfiguration{Version: 1, GitHubTarget: &copyTarget})
+}
+
+func (store *Store) LoadTargetSnapshot(target OwnerIdentity) (*Snapshot, error) {
+	file, err := os.Open(store.targetSnapshotPath(target))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open target dashboard snapshot: %w", err)
+	}
+	defer file.Close()
+	var snapshot Snapshot
+	if err := json.NewDecoder(file).Decode(&snapshot); err != nil {
+		return nil, fmt.Errorf("decode target dashboard snapshot: %w", err)
+	}
+	return &snapshot, nil
+}
+
+func (store *Store) SaveTargetSnapshot(target OwnerIdentity, snapshot *Snapshot) error {
+	return store.writeJSON(store.targetSnapshotPath(target), snapshot)
+}
+
+func (store *Store) LoadTargetRepositoryCatalog(target OwnerIdentity) (RepositoryCatalog, error) {
+	var catalog RepositoryCatalog
+	file, err := os.Open(store.targetCatalogPath(target))
+	if err != nil {
+		return catalog, err
+	}
+	defer file.Close()
+	if err := json.NewDecoder(file).Decode(&catalog); err != nil {
+		return RepositoryCatalog{}, fmt.Errorf("decode target repository catalog: %w", err)
+	}
+	if catalog.Version != 1 {
+		return RepositoryCatalog{}, errors.New("target repository catalog version requires refresh")
+	}
+	return catalog, nil
+}
+
+func (store *Store) SaveTargetRepositoryCatalog(target OwnerIdentity, catalog RepositoryCatalog) error {
+	return store.writeJSON(store.targetCatalogPath(target), catalog)
+}
+
+func (store *Store) LoadRepositoryCacheMetadata(repositoryID int64) (RepositoryCacheMetadata, error) {
+	var metadata RepositoryCacheMetadata
+	file, err := os.Open(store.metadataPath(repositoryID))
+	if err != nil {
+		return metadata, err
+	}
+	defer file.Close()
+	if err := json.NewDecoder(file).Decode(&metadata); err != nil {
+		return RepositoryCacheMetadata{}, fmt.Errorf("decode repository cache metadata: %w", err)
+	}
+	return metadata, nil
+}
+
+func (store *Store) SaveRepositoryCacheMetadata(repositoryID int64, metadata RepositoryCacheMetadata) error {
+	return store.writeJSON(store.metadataPath(repositoryID), metadata)
 }
 
 func (store *Store) NewCommitTemp(repositoryID int64) (*os.File, error) {
@@ -228,6 +338,45 @@ func (store *Store) LoadReports(snapshot *Snapshot) (map[int64]RepositoryReport,
 		reports[repository.ID] = report
 	}
 	return reports, warnings
+}
+
+// LoadCachedReport reads repository-level caches only after discovery has
+// established that the repository belongs to the configured target. This is
+// also the safe bridge from the old combined snapshot layout.
+func (store *Store) LoadCachedReport(repository Repository) (RepositoryReport, []string) {
+	report := RepositoryReport{Repository: repository, SyncStatus: "cached"}
+	warnings := make([]string, 0)
+	commits, err := store.LoadCommitStats(repository.ID)
+	if err == nil {
+		report.Commits = commits
+		if enriched, loadErr := store.LoadAnalysisCache(repository.ID); loadErr == nil && enriched.Version == 2 {
+			report.Commits.Events = enriched.Events
+		} else if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+			warnings = append(warnings, repository.FullName+": cached enriched analysis could not be loaded")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		warnings = append(warnings, repository.FullName+": cached commit report could not be loaded")
+	}
+	if cache, loadErr := store.LoadPullCache(repository.ID); loadErr == nil {
+		stats := BuildPullStats(cache.PullRequests)
+		report.Pulls = &stats
+	} else if !errors.Is(loadErr, os.ErrNotExist) {
+		warnings = append(warnings, repository.FullName+": cached pull request report could not be loaded")
+	}
+	if cache, loadErr := store.LoadActionsCache(repository.ID); loadErr == nil && cache.Version == 1 {
+		report.Actions = &cache
+	} else if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+		warnings = append(warnings, repository.FullName+": cached GitHub Actions evidence could not be loaded")
+	}
+	return report, warnings
+}
+
+func (store *Store) CommitCacheComplete(repositoryID int64) bool {
+	if _, err := store.LoadCommitStats(repositoryID); err != nil {
+		return false
+	}
+	analysis, err := store.LoadAnalysisCache(repositoryID)
+	return err == nil && analysis.Version == 2
 }
 
 func repositoryFromSummary(summary RepositorySummary) Repository {

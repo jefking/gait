@@ -413,6 +413,11 @@ func identityAliasCycle(start string, overrides map[string]IdentityOverride) boo
 }
 
 func (manager *Manager) insightState() (map[int64]RepositoryReport, map[string]IdentityOverride) {
+	reports, overrides, _ := manager.insightStateWithTarget()
+	return reports, overrides
+}
+
+func (manager *Manager) insightStateWithTarget() (map[int64]RepositoryReport, map[string]IdentityOverride, *OwnerIdentity) {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	reports := make(map[int64]RepositoryReport, len(manager.reports))
@@ -423,7 +428,12 @@ func (manager *Manager) insightState() (map[int64]RepositoryReport, map[string]I
 	for key, override := range manager.identityOverrides {
 		overrides[key] = override
 	}
-	return reports, overrides
+	var selectedTarget *OwnerIdentity
+	if manager.selectedTarget != nil {
+		target := *manager.selectedTarget
+		selectedTarget = &target
+	}
+	return reports, overrides, selectedTarget
 }
 
 func prepareInsightQuery(reports map[int64]RepositoryReport, query InsightQuery) (InsightQuery, InsightMeta, error) {

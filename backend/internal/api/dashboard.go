@@ -54,13 +54,12 @@ func identitiesHandler(service InsightsService) http.HandlerFunc {
 func parseScopeQuery(request *http.Request) (dashboard.InsightQuery, error) {
 	query := dashboard.InsightQuery{}
 	var err error
+	if request.URL.Query().Has("organization_id") {
+		return query, errors.New("organization_id is no longer supported; GitHub target selection is configured in settings")
+	}
 	query.ExcludeDead, err = optionalBool(request.URL.Query().Get("exclude_dead"))
 	if err != nil {
 		return query, errors.New("exclude_dead must be true or false")
-	}
-	query.OwnerID, err = optionalPositiveInt64(request.URL.Query().Get("organization_id"))
-	if err != nil {
-		return query, errors.New("organization_id must be a positive integer")
 	}
 	query.RepositoryID, err = optionalPositiveInt64(request.URL.Query().Get("repository_id"))
 	if err != nil {
@@ -167,16 +166,43 @@ func eventsHandler(service DashboardService) http.HandlerFunc {
 }
 
 func syncHandler(service DashboardService) http.HandlerFunc {
-	type syncRequest struct {
+	return func(response http.ResponseWriter, request *http.Request) {
+		request.Body = http.MaxBytesReader(response, request.Body, 8<<10)
+		decoder := json.NewDecoder(request.Body)
+		var input map[string]json.RawMessage
+		if err := decoder.Decode(&input); err != nil || input == nil || len(input) != 0 {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "request must contain one empty JSON object"})
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "request must contain one JSON object"})
+			return
+		}
+		status, err := service.Start()
+		if errors.Is(err, dashboard.ErrSyncActive) {
+			writeJSONValue(response, http.StatusConflict, map[string]any{"error": err.Error(), "sync": status})
+			return
+		}
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		response.Header().Set("Cache-Control", "no-store")
+		writeJSONValue(response, http.StatusAccepted, map[string]dashboard.SyncStatus{"sync": status})
+	}
+}
+
+func githubTargetsHandler(service DashboardService) http.HandlerFunc {
+	type targetRequest struct {
 		PAT string `json:"pat"`
 	}
 	return func(response http.ResponseWriter, request *http.Request) {
 		request.Body = http.MaxBytesReader(response, request.Body, 8<<10)
 		decoder := json.NewDecoder(request.Body)
 		decoder.DisallowUnknownFields()
-		var input syncRequest
+		var input targetRequest
 		if err := decoder.Decode(&input); err != nil {
-			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "request must contain a PAT"})
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "request must contain a JSON object"})
 			return
 		}
 		if err := decoder.Decode(&struct{}{}); err != io.EOF {
@@ -188,10 +214,50 @@ func syncHandler(service DashboardService) http.HandlerFunc {
 			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "PAT must not exceed 4096 characters"})
 			return
 		}
-		status, err := service.Start(input.PAT)
+		pat := input.PAT
+		discovery, err := service.DiscoverTargets(pat)
+		errorMessage := ""
+		if err != nil {
+			errorMessage = err.Error()
+			if pat != "" {
+				errorMessage = strings.ReplaceAll(errorMessage, pat, "[redacted]")
+			}
+		}
 		input.PAT = ""
+		pat = ""
 		if errors.Is(err, dashboard.ErrSyncActive) {
-			writeJSONValue(response, http.StatusConflict, map[string]any{"error": err.Error(), "sync": status})
+			writeJSONValue(response, http.StatusConflict, map[string]string{"error": errorMessage})
+			return
+		}
+		if err != nil {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": errorMessage})
+			return
+		}
+		response.Header().Set("Cache-Control", "no-store")
+		writeJSONValue(response, http.StatusOK, discovery)
+	}
+}
+
+func selectGitHubTargetHandler(service DashboardService) http.HandlerFunc {
+	type selectionRequest struct {
+		TargetID int64 `json:"target_id"`
+	}
+	return func(response http.ResponseWriter, request *http.Request) {
+		request.Body = http.MaxBytesReader(response, request.Body, 8<<10)
+		decoder := json.NewDecoder(request.Body)
+		decoder.DisallowUnknownFields()
+		var input selectionRequest
+		if err := decoder.Decode(&input); err != nil || input.TargetID <= 0 {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "target_id must be a positive integer"})
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			writeJSONValue(response, http.StatusBadRequest, map[string]string{"error": "request must contain one JSON object"})
+			return
+		}
+		result, err := service.SelectTarget(input.TargetID)
+		if errors.Is(err, dashboard.ErrSyncActive) {
+			writeJSONValue(response, http.StatusConflict, map[string]any{"error": err.Error(), "dashboard": result})
 			return
 		}
 		if err != nil {
@@ -199,7 +265,7 @@ func syncHandler(service DashboardService) http.HandlerFunc {
 			return
 		}
 		response.Header().Set("Cache-Control", "no-store")
-		writeJSONValue(response, http.StatusAccepted, map[string]dashboard.SyncStatus{"sync": status})
+		writeJSONValue(response, http.StatusAccepted, result)
 	}
 }
 

@@ -14,7 +14,9 @@ import (
 
 type fakeDashboardService struct {
 	response         dashboard.DashboardResponse
-	started          string
+	started          bool
+	discovered       string
+	selected         int64
 	startErr         error
 	events           chan dashboard.DashboardEvent
 	insightQuery     dashboard.InsightQuery
@@ -28,9 +30,19 @@ func (service *fakeDashboardService) Dashboard() dashboard.DashboardResponse {
 	return service.response
 }
 
-func (service *fakeDashboardService) Start(token string) (dashboard.SyncStatus, error) {
-	service.started = token
+func (service *fakeDashboardService) Start() (dashboard.SyncStatus, error) {
+	service.started = true
 	return dashboard.SyncStatus{ID: "sync-1", State: dashboard.SyncDiscovering}, service.startErr
+}
+
+func (service *fakeDashboardService) DiscoverTargets(token string) (dashboard.TargetDiscovery, error) {
+	service.discovered = token
+	return dashboard.TargetDiscovery{Viewer: dashboard.Viewer{ID: 9, Login: "viewer"}, Targets: []dashboard.OwnerIdentity{{ID: 9, Login: "viewer", Type: "User"}}}, service.startErr
+}
+
+func (service *fakeDashboardService) SelectTarget(targetID int64) (dashboard.DashboardResponse, error) {
+	service.selected = targetID
+	return dashboard.DashboardResponse{Sync: dashboard.SyncStatus{ID: "sync-1", State: dashboard.SyncDiscovering}}, service.startErr
 }
 
 func (service *fakeDashboardService) Subscribe(context.Context) <-chan dashboard.DashboardEvent {
@@ -73,23 +85,57 @@ func (service *fakeDashboardService) UpdateIdentity(key string, override dashboa
 	return service.Identities(), service.identityErr
 }
 
-func TestStartSyncAPIAcceptsPATWithoutEchoingIt(t *testing.T) {
+func TestGitHubTargetsAPIAcceptsPATWithoutEchoingIt(t *testing.T) {
 	service := &fakeDashboardService{}
 	body := []byte(`{"pat":"top-secret"}`)
-	request := httptest.NewRequest(http.MethodPost, "/api/sync", bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/api/github/targets", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
 	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
 
-	if response.Code != http.StatusAccepted {
-		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
 	}
-	if service.started != "top-secret" {
+	if service.discovered != "top-secret" {
 		t.Fatalf("service did not receive PAT")
 	}
 	if bytes.Contains(response.Body.Bytes(), []byte("top-secret")) {
 		t.Fatalf("response echoed PAT: %s", response.Body.String())
+	}
+}
+
+func TestGitHubTargetsAPIRedactsPATFromFailures(t *testing.T) {
+	service := &fakeDashboardService{startErr: errors.New("GitHub rejected top-secret")}
+	request := httptest.NewRequest(http.MethodPost, "/api/github/targets", bytes.NewBufferString(`{"pat":"top-secret"}`))
+	response := httptest.NewRecorder()
+	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || bytes.Contains(response.Body.Bytes(), []byte("top-secret")) || !bytes.Contains(response.Body.Bytes(), []byte("[redacted]")) {
+		t.Fatalf("PAT was not redacted from failure: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSelectGitHubTargetAPIValidatesAndStartsSelection(t *testing.T) {
+	service := &fakeDashboardService{}
+	request := httptest.NewRequest(http.MethodPut, "/api/configuration/github-target", bytes.NewBufferString(`{"target_id":7}`))
+	response := httptest.NewRecorder()
+	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || service.selected != 7 {
+		t.Fatalf("target selection was not accepted: %d %s", response.Code, response.Body.String())
+	}
+
+	invalid := &fakeDashboardService{}
+	response = httptest.NewRecorder()
+	NewRouter(t.TempDir(), invalid).ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/configuration/github-target", bytes.NewBufferString(`{"target_id":0}`)))
+	if response.Code != http.StatusBadRequest || invalid.selected != 0 {
+		t.Fatalf("invalid target selection was not rejected: %d %s", response.Code, response.Body.String())
+	}
+
+	conflict := &fakeDashboardService{startErr: dashboard.ErrSyncActive}
+	response = httptest.NewRecorder()
+	NewRouter(t.TempDir(), conflict).ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/configuration/github-target", bytes.NewBufferString(`{"target_id":7}`)))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("concurrent target selection did not conflict: %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -103,14 +149,14 @@ func TestStartSyncAPIAcceptsRefreshWithoutPAT(t *testing.T) {
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, response.Code, response.Body.String())
 	}
-	if service.started != "" {
-		t.Fatalf("refresh unexpectedly supplied PAT")
+	if !service.started {
+		t.Fatalf("refresh did not start")
 	}
 }
 
 func TestStartSyncAPIRejectsConcurrentJob(t *testing.T) {
 	service := &fakeDashboardService{startErr: dashboard.ErrSyncActive}
-	request := httptest.NewRequest(http.MethodPost, "/api/sync", bytes.NewBufferString(`{"pat":"token"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/sync", bytes.NewBufferString(`{}`))
 	response := httptest.NewRecorder()
 	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
 	if response.Code != http.StatusConflict {
@@ -120,14 +166,14 @@ func TestStartSyncAPIRejectsConcurrentJob(t *testing.T) {
 
 func TestDeliveryAPIParsesGlobalScope(t *testing.T) {
 	service := &fakeDashboardService{}
-	request := httptest.NewRequest(http.MethodGet, "/api/insights/delivery?organization_id=7&exclude_dead=true&from=2025-01-01&to=2025-02-01", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/insights/delivery?exclude_dead=true&from=2025-01-01&to=2025-02-01", nil)
 	response := httptest.NewRecorder()
 	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected OK, got %d: %s", response.Code, response.Body.String())
 	}
 	query := service.insightQuery
-	if query.OwnerID != 7 || !query.ExcludeDead || query.From == nil || query.To == nil {
+	if query.OwnerID != 0 || !query.ExcludeDead || query.From == nil || query.To == nil {
 		t.Fatalf("unexpected query: %+v", query)
 	}
 }
@@ -167,8 +213,18 @@ func TestStartSyncAPIRejectsUnknownFields(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected bad request, got %d", response.Code)
 	}
-	if service.started != "" {
+	if service.started {
 		t.Fatalf("service should not have been called")
+	}
+}
+
+func TestStartSyncAPIRejectsNull(t *testing.T) {
+	service := &fakeDashboardService{}
+	request := httptest.NewRequest(http.MethodPost, "/api/sync", bytes.NewBufferString(`null`))
+	response := httptest.NewRecorder()
+	NewRouter(t.TempDir(), service).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || service.started {
+		t.Fatalf("expected null refresh to be rejected, got %d", response.Code)
 	}
 }
 
@@ -209,7 +265,7 @@ func TestInsightAPIRoutesAndRejectsInvalidQueries(t *testing.T) {
 	}
 	tests := []struct{ name, query, want string }{
 		{"boolean", "exclude_dead=nope", "exclude_dead must be true or false"},
-		{"organization", "organization_id=x", "organization_id must be a positive integer"},
+		{"organization", "organization_id=7", "organization_id is no longer supported"},
 		{"repository", "repository_id=0", "repository_id must be a positive integer"},
 		{"from", "from=yesterday", "from must use YYYY-MM-DD"},
 		{"to", "to=2025-13-01", "to must use YYYY-MM-DD"},
@@ -274,16 +330,15 @@ func TestIdentityAPIHandlesReadsAndInvalidUpdates(t *testing.T) {
 	}
 }
 
-func TestStartSyncAPIRejectsMalformedOversizedAndServiceFailures(t *testing.T) {
+func TestStartSyncAPIRejectsMalformedAndServiceFailures(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
 		err  error
 		want string
 	}{
-		{"malformed", `{`, nil, "request must contain a PAT"},
+		{"malformed", `{`, nil, "request must contain one empty JSON object"},
 		{"multiple objects", `{} {}`, nil, "request must contain one JSON object"},
-		{"oversized token", `{"pat":"` + string(bytes.Repeat([]byte{'x'}, maximumPATLength+1)) + `"}`, nil, "PAT must not exceed 4096 characters"},
 		{"service failure", `{}`, errors.New("no retained PAT"), "no retained PAT"},
 	}
 	for _, test := range tests {
