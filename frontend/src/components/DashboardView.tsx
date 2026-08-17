@@ -19,7 +19,6 @@ import { useState } from 'react'
 import type {
   ActorKind,
   DeliveryPerformanceMode,
-  DeliveryQualityPoint,
   DeliveryRawMetrics,
   DeliveryResponse,
   IdentitySummary,
@@ -167,10 +166,6 @@ export function DashboardView({
           <ImpactPanel delivery={delivery} loading={deliveryLoading} />
         </GraphSection>
 
-        <GraphSection eyebrow="Guardrails" title="Is quality going up or down?" description="Signals keep independent axes and samples. GitHub Actions incidence is not presented as coverage of external CI providers." icon={<ShieldCheck className="size-4" />}>
-          <QualityMultiples delivery={delivery} loading={deliveryLoading} />
-        </GraphSection>
-
         <GraphSection eyebrow="Flow + batch health" title="PR workload at the selected end date" description="Open-PR age and merged-PR batch distributions expose work waiting too long or arriving in oversized batches." icon={<GitPullRequest className="size-4" />}>
           <FlowHealth delivery={delivery} loading={deliveryLoading} />
         </GraphSection>
@@ -226,34 +221,6 @@ function ImpactPanel({ delivery, loading }: { delivery: DeliveryResponse | null;
   if (!impact) return <EmptyBlock>Impact evidence is unavailable.</EmptyBlock>
   const qualityDeltas = impact.quality_deltas ?? []
   return <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr_1fr]"><article className="rounded-2xl border border-white/8 bg-slate-950/45 p-5"><p className="text-xs uppercase tracking-wider text-slate-500">Evidence tier</p><p className="mt-2 text-lg font-semibold text-white">{impact.tier.replaceAll('_',' ')}</p><p className="mt-2 text-sm text-slate-400">{impact.verdict}</p></article><article className="rounded-2xl border border-white/8 bg-slate-950/45 p-5"><p className="text-xs uppercase tracking-wider text-slate-500">Velocity estimate</p><p className="mt-2 text-2xl font-semibold text-white">{impact.estimate === undefined ? '—' : `${impact.estimate >= 0 ? '+' : ''}${impact.estimate.toFixed(1)} points`}</p><p className="mt-2 text-xs text-slate-500">95% interval {impact.interval_low === undefined ? 'unavailable' : `${impact.interval_low.toFixed(1)} to ${impact.interval_high?.toFixed(1)}`}</p></article><article className="rounded-2xl border border-white/8 bg-slate-950/45 p-5"><p className="text-xs uppercase tracking-wider text-slate-500">Sample + coverage</p><dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><Metric label="Treated" value={impact.treated_repositories} /><Metric label="Controls" value={impact.control_repositories} /><Metric label="Window" value={`${impact.pre_weeks}+${impact.post_weeks}w`} /><Metric label="Adoption" value={percent.format(impact.adoption_coverage)} /></dl></article>{qualityDeltas.length>0&&<div className="overflow-hidden rounded-2xl border border-white/8 bg-slate-950/45 lg:col-span-3"><table className="w-full text-left text-xs"><caption className="px-4 py-3 text-left font-medium text-slate-200">Separate quality deltas using the same fixed windows</caption><thead className="border-y border-white/8 text-slate-500"><tr><th className="px-4 py-2">Signal</th><th className="px-4 py-2 text-right">Delta</th><th className="px-4 py-2 text-right">95% interval</th><th className="px-4 py-2 text-right">n</th></tr></thead><tbody>{qualityDeltas.map((delta)=><tr key={delta.key} className="border-b border-white/5 last:border-0"><th className="px-4 py-3 font-medium text-slate-300">{delta.key.replaceAll('_',' ')}</th><td className="px-4 py-3 text-right tabular-nums text-slate-400">{delta.delta?.toFixed(3)??'—'}</td><td className="px-4 py-3 text-right tabular-nums text-slate-400">{delta.interval_low===undefined?'—':`${delta.interval_low.toFixed(3)} to ${delta.interval_high?.toFixed(3)}`}</td><td className="px-4 py-3 text-right tabular-nums text-slate-400">{delta.sample}</td></tr>)}</tbody></table></div>}</div>
-}
-
-const qualitySpecs: Array<{ key:keyof DeliveryQualityPoint; label:string; sample:keyof DeliveryQualityPoint; percent?:boolean }> = [
-  {key:'actions_failure_incidence',label:'PRs with a failed Actions attempt',sample:'actions_pull_sample',percent:true},
-  {key:'failed_actions_attempts',label:'Failed Actions attempts',sample:'total_actions_attempts'},
-  {key:'total_actions_attempts',label:'Total Actions attempts',sample:'total_actions_attempts'},
-  {key:'revert_rate',label:'Revert rate',sample:'commit_sample',percent:true},
-  {key:'review_coverage',label:'Review coverage',sample:'review_sample',percent:true},
-  {key:'retained_line_rate',label:'30-day retained-line rate',sample:'retention_sample',percent:true},
-  {key:'median_merge_hours',label:'Median merge time (hours)',sample:'merge_time_sample'},
-  {key:'p90_merge_hours',label:'p90 merge time (hours)',sample:'merge_time_sample'},
-]
-
-function QualityMultiples({ delivery, loading }: { delivery: DeliveryResponse | null; loading: boolean }) {
-  if (loading) return <LoadingBlock label="Loading quality signals" />
-  const points=delivery?.quality.points??[]
-  if (!points.length) return <EmptyBlock>No quality samples are available.</EmptyBlock>
-  const directionByKey=new Map((delivery?.quality.signals??[]).map((signal)=>[signal.key,signal]))
-  return <div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{qualitySpecs.map((spec)=><MiniQuality key={String(spec.key)} points={points} spec={spec} direction={directionByKey.get(String(spec.key))?.direction} />)}<article className="rounded-2xl border border-white/8 bg-slate-950/45 p-4"><p className="text-sm font-medium text-slate-200">GitHub Actions coverage</p><p className="mt-5 text-3xl font-semibold text-white">{integer.format(points.reduce((total,point)=>total+point.actions_pull_sample,0))}<span className="text-base font-normal text-slate-500"> PR-period samples</span></p><p className="mt-2 text-xs text-slate-500">GitHub Actions only · external CI providers are explicitly uncovered</p></article></div><AccessibleQualityTable points={points}/></div>
-}
-
-function MiniQuality({ points, spec, direction }: { points:DeliveryQualityPoint[];spec:typeof qualitySpecs[number];direction?:string }) {
-  const values=points.map((point)=>typeof point[spec.key]==='number'?point[spec.key] as number:undefined)
-  const defined=values.filter((value):value is number=>value!==undefined)
-  const maximum=Math.max(...defined,1e-9), width=280,height=76
-  const path=values.map((value,index)=>value===undefined?null:{x:index/(Math.max(1,values.length-1))*width,y:height-(value/maximum)*(height-8)}).reduce<string>((result,point,index)=>point?`${result}${result&&values[index-1]!==undefined?' L':' M'} ${point.x} ${point.y}`:result,'')
-  let latestIndex=-1;for(let index=values.length-1;index>=0;index-=1){if(values[index]!==undefined){latestIndex=index;break}}const latest=latestIndex>=0?values[latestIndex]:undefined;const sample=latestIndex>=0?Number(points[latestIndex][spec.sample]):0
-  return <article className="rounded-2xl border border-white/8 bg-slate-950/45 p-4"><div className="flex justify-between gap-3"><p className="text-sm font-medium text-slate-200">{spec.label}</p><span className={`text-[10px] uppercase tracking-wider ${direction==='improving'?'text-emerald-300':direction==='declining'?'text-rose-300':'text-slate-500'}`}>{direction??'sampled'}</span></div><svg aria-hidden="true" viewBox={`0 0 ${width} ${height}`} className="mt-3 h-20 w-full"><path d={path} fill="none" stroke="#67e8f9" strokeWidth="2" /><line x1="0" x2={width} y1={height-1} y2={height-1} stroke="#334155" /></svg><div className="flex justify-between text-xs text-slate-500"><span>latest {latest===undefined?'—':spec.percent?percent.format(latest):latest.toFixed(1)}</span><span>n={sample}</span></div></article>
 }
 
 function FlowHealth({ delivery, loading }: { delivery:DeliveryResponse|null;loading:boolean }) {
@@ -323,7 +290,6 @@ function Methodology({ delivery, scope, period }: { delivery:DeliveryResponse|nu
 
 function AccessibleVelocityTable({delivery}:{delivery:DeliveryResponse}){return <table className="sr-only"><caption>Velocity index contributions over time</caption><thead><tr><th>Period</th><th>Human</th><th>Agent</th><th>Collaborative</th><th>Authorship unknown PRs</th><th>Total</th><th>Complete</th></tr></thead><tbody>{delivery.velocity.map((point)=><tr key={point.date}><td>{point.date}</td><td>{point.human.index}</td><td>{point.agent.index}</td><td>{point.collaborative.index}</td><td>{point.authorship_unknown.merged_pull_requests}</td><td>{point.total_index}</td><td>{point.complete?'yes':'no'}</td></tr>)}</tbody></table>}
 function AccessiblePerformanceTable({delivery}:{delivery:DeliveryResponse}){return <table className="sr-only"><caption>Daily performance leaders by code authorship composition</caption><thead><tr><th>Date</th><th>Leader</th><th>Human</th><th>Human plus human</th><th>Human plus agent</th><th>Agent</th><th>Authorship unknown PRs</th><th>Total</th></tr></thead><tbody>{(delivery.performance?.daily??[]).map((point)=><tr key={point.date}><td>{point.date}</td><td>{performanceModeLabel(point.leader)}</td><td>{point.human.index}</td><td>{point.human_human.index}</td><td>{point.human_agent.index}</td><td>{point.agent.index}</td><td>{point.authorship_unknown.merged_pull_requests}</td><td>{point.total_index}</td></tr>)}</tbody></table>}
-function AccessibleQualityTable({points}:{points:DeliveryQualityPoint[]}){return <table className="sr-only"><caption>Quality signals and samples by period</caption><thead><tr><th>Period</th><th>Actions failure incidence</th><th>Actions PR sample</th><th>Failed attempts</th><th>Total attempts</th><th>Revert rate</th><th>Commit sample</th><th>Review coverage</th><th>Review sample</th><th>Retained-line rate</th><th>Retention sample</th><th>Median merge hours</th><th>p90 merge hours</th><th>Merge sample</th></tr></thead><tbody>{points.map((point)=><tr key={point.date}><td>{point.date}</td><td>{point.actions_failure_incidence}</td><td>{point.actions_pull_sample}</td><td>{point.failed_actions_attempts}</td><td>{point.total_actions_attempts}</td><td>{point.revert_rate}</td><td>{point.commit_sample}</td><td>{point.review_coverage}</td><td>{point.review_sample}</td><td>{point.retained_line_rate}</td><td>{point.retention_sample}</td><td>{point.median_merge_hours}</td><td>{point.p90_merge_hours}</td><td>{point.merge_time_sample}</td></tr>)}</tbody></table>}
 function AccessibleFlowTable({points}:{points:DeliveryResponse['flow']['points']}){return <table className="sr-only"><caption>PR flow and batch health by period</caption><thead><tr><th>Period</th><th>Merged PRs</th><th>Median changed lines</th><th>p90 changed lines</th><th>Median commits</th><th>p90 commits</th><th>Median additions</th><th>p90 additions</th><th>Median deletions</th><th>p90 deletions</th></tr></thead><tbody>{points.map((point)=><tr key={point.date}><td>{point.date}</td><td>{point.merged_pull_requests}</td><td>{point.median_changed_lines}</td><td>{point.p90_changed_lines}</td><td>{point.median_commits}</td><td>{point.p90_commits}</td><td>{point.median_additions}</td><td>{point.p90_additions}</td><td>{point.median_deletions}</td><td>{point.p90_deletions}</td></tr>)}</tbody></table>}
 function Metric({label,value}:{label:string;value:string|number}){return <div><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 font-medium text-slate-200">{value}</dd></div>}
 function Legend({color,label,line=false}:{color:string;label:string;line?:boolean}){return <span className="inline-flex items-center gap-1.5"><span className={`${line?'h-0.5 w-4':'size-2.5 rounded-sm'}`} style={{background:color}}/>{label}</span>}
